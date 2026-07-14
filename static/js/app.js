@@ -231,29 +231,46 @@ function searchPapers() {
         '构建技术演进图谱'
     ]);
 
-    // 使用no-cache搜索以获取新结果
-    const url = `/api/search?q=${encodeURIComponent(query)}`;
-    fetch(url)
-        .then(response => response.json())
+    const url = `/api/search?q=${encodeURIComponent(query)}&cache=false`;
+    fetch(url, {
+        method: 'GET',
+        headers: {
+            'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(180000)
+    })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text}`);
+                });
+            }
+            return response.json();
+        })
         .then(data => {
             showLoading(false);
             if (data.error) {
-                alert(data.error);
+                console.error('Search failed:', data.error);
+                alert(`搜索失败: ${data.error}`);
                 return;
             }
             currentData = data;
-            // 缓存论文数据
             if (data.papers) {
                 data.papers.forEach(p => { currentPaperData[p.id] = p; });
             }
-            // 保存搜索历史
             saveSearchHistory(query);
             displayTimeline(data);
         })
         .catch(error => {
             showLoading(false);
             console.error('Search error:', error);
-            alert('搜索失败，请检查网络后重试');
+            if (error.name === 'TimeoutError') {
+                alert('搜索超时，请稍后重试');
+            } else if (error.name === 'AbortError') {
+                alert('搜索已取消');
+            } else {
+                alert('搜索失败，请检查网络后重试\n\n错误详情: ' + error.message);
+            }
         });
 }
 
