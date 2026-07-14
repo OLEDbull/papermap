@@ -14,6 +14,11 @@ limiter = Limiter(
 )
 
 
+@api_bp.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok', 'service': 'PaperMap'}), 200
+
+
 @api_bp.route('/search', methods=['GET'])
 @limiter.limit("30 per minute")
 def search_papers():

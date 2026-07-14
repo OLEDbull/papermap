@@ -1,0 +1,16 @@
+name: Keep Render Service Alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send heartbeat request
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" https://papermap-isv8.onrender.com/api/health -m 30
+        env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
