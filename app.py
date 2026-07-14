@@ -107,7 +107,24 @@ def _register_global_objects(app):
         return render_template('index.html')
 
 
-app = create_app()
+try:
+    app = create_app()
+    print("Flask app created successfully", flush=True)
+except Exception as e:
+    print(f"CRITICAL: create_app() failed: {e}", flush=True)
+    import traceback
+    traceback.print_exc()
+    # Fallback: create minimal Flask app so gunicorn can start
+    from flask import Flask as _Flask
+    app = _Flask(__name__)
+
+    @app.route('/')
+    def _fallback_index():
+        return f'<h1>App startup error</h1><pre>{e}</pre>'
+
+    @app.route('/api/health')
+    def _fallback_health():
+        return {'status': 'error', 'message': str(e)}, 500
 
 if __name__ == '__main__':
     print("=" * 60)
