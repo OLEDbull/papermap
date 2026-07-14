@@ -30,6 +30,7 @@ class PaperManager:
             translated_query = self.summarizer.translate_keyword(query)
             logger.info(f"Translated query: {translated_query}")
 
+            # 多来源聚合：Semantic Scholar（期刊/顶会/综述）+ arXiv（预印本）
             papers = self._fetch_multi_source(translated_query, max_results)
             if not papers:
                 logger.warning(f"No papers found from any source, using demo data for query: {translated_query}")
@@ -39,15 +40,7 @@ class PaperManager:
             logger.info(f"Found and sorted {len(papers)} papers (after dedup)")
 
             logger.info(f"Generating summaries and impact scores for {len(papers)} papers (batch mode)...")
-            batch_results = {}
-            try:
-                batch_results = self.summarizer.summarize_papers_batch(papers, batch_size=25)
-                if not batch_results:
-                    raise ValueError("Empty batch results")
-            except Exception as e:
-                logger.error(f"Batch AI summarization failed: {e}, falling back to mock mode")
-                for p in papers:
-                    batch_results[p['id']] = self.summarizer._mock_summarize(p)
+            batch_results = self.summarizer.summarize_papers_batch(papers, batch_size=25)
 
             for paper in papers:
                 ai_summary = batch_results.get(paper['id'], {})
@@ -55,6 +48,7 @@ class PaperManager:
                 paper['novelty'] = ai_summary.get('novelty', 50)
                 paper['impact_factor'] = ai_summary.get('impact_factor', 3.0)
                 paper['is_breakthrough'] = ai_summary.get('is_breakthrough', False)
+                # 引用量：优先使用 Semantic Scholar 真实数据，否则用 AI 估算 + 后处理
                 real_citations = paper.get('citation_count', 0)
                 if real_citations and real_citations > 0:
                     paper['estimated_citations'] = real_citations

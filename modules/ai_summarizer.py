@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Any
 
 import requests
 import config
+from modules.free_translator import FreeTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class AISummarizer:
         self.timeout: int = config.AI_TIMEOUT
         self.max_tokens: int = config.AI_MAX_TOKENS
         self.temperature: float = config.AI_TEMPERATURE
+        self._free_translator: FreeTranslator = FreeTranslator()
 
     def _call_deepseek(self, prompt: str, temperature: float = None, max_tokens: int = None) -> Optional[Dict[str, Any]]:
         try:
@@ -651,3 +653,68 @@ class AISummarizer:
         citation_score = min(citations / 1000.0, 1.0)
         impact = 1.5 + novelty_score * 5.0 + citation_score * 3.5
         return round(min(10.0, max(1.0, impact)), 1)
+
+    def translate_text(self, text: str, source_lang: str = 'en', target_lang: str = 'zh', use_ai: bool = False) -> str:
+        """翻译文本，优先使用免费翻译器（Argos Translate），可选 DeepSeek AI 高质量翻译
+
+        Args:
+            text: 待翻译文本
+            source_lang: 源语言代码
+            target_lang: 目标语言代码
+            use_ai: 是否使用 DeepSeek AI 翻译（默认 False，使用免费的 Argos Translate）
+        """
+        if not text or not text.strip():
+            return ''
+
+        # 如果原文已经是目标语言，直接返回
+        if self._is_target_language(text, target_lang):
+            return text
+
+        # 1. 默认使用免费翻译（Argos Translate 离线 / LibreTranslate 在线）
+        if not use_ai:
+            translated = self._free_translator.translate(text, source_lang, target_lang)
+            if translated and translated != text:
+                return translated
+            logger.info("Free translator returned same text or failed, falling back...")
+
+        # 2. 使用 DeepSeek AI 翻译（高质量，消耗 token）
+        if self.provider == 'deepseek' and self.api_key:
+            prompt = f"""你是一个专业的科研翻译助手。请将以下{source_lang}文本翻译为{target_lang}。
+
+要求：
+1. 保持学术语义的准确性，特别是专业术语
+2. 保持原文的语气和风格
+3. 不要遗漏任何信息
+4. 如果原文已经是目标语言，直接返回原文
+
+原文：
+{text}
+
+请只返回翻译结果，不要添加任何解释或额外内容。"""
+
+            result = self._call_deepseek(prompt, temperature=0.3, max_tokens=2000)
+            if result and isinstance(result, dict):
+                translated = result.get('translated', '') or result.get('translation', '')
+                if translated:
+                    return translated.strip()
+                content = result.get('content', '') or str(result)
+                if content and content != str(result):
+                    return content.strip()
+                return str(result).strip()
+            elif result and isinstance(result, str):
+                return result.strip()
+
+        # 3. 全部失败，返回原文
+        return text
+
+    def _is_target_language(self, text: str, target_lang: str) -> bool:
+        """简单判断文本是否已经是目标语言"""
+        if target_lang == 'zh':
+            # 如果文本中中文字符占比超过 30%，认为是中文
+            chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+            return chinese_chars / max(len(text), 1) > 0.3
+        elif target_lang == 'en':
+            # 如果文本主要是 ASCII 字符，认为是英文
+            ascii_chars = sum(1 for c in text if c.isascii() and c.isalpha())
+            return ascii_chars / max(len(text), 1) > 0.5
+        return False

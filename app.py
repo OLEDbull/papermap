@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+from logging.handlers import RotatingFileHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -30,13 +31,12 @@ def create_app(config_obj=None):
     _register_error_handlers(app)
     _register_global_objects(app)
 
-    app.logger.info("Application initialized successfully")
     return app
 
 
 def _setup_logging(app):
     logger = logging.getLogger()
-    logger.setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
+    logger.setLevel(getattr(logging, config.LOG_LEVEL))
 
     formatter = logging.Formatter(
         '%(asctime)s %(levelname)s %(name)s %(message)s'
@@ -46,18 +46,16 @@ def _setup_logging(app):
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    try:
-        from logging.handlers import RotatingFileHandler
-        file_handler = RotatingFileHandler(
-            config.LOG_FILE,
-            maxBytes=1024 * 1024 * 10,
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    except Exception as e:
-        app.logger.warning(f"File logging disabled: {e}")
+    file_handler = RotatingFileHandler(
+        config.LOG_FILE,
+        maxBytes=1024 * 1024 * 10,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    app.logger.info(f"Application initialized with {config.FLASK_ENV} environment")
 
 
 def _setup_extensions(app):
@@ -66,8 +64,7 @@ def _setup_extensions(app):
     Limiter(
         app=app,
         key_func=get_remote_address,
-        default_limits=[f"{config.REQUEST_RATE_LIMIT} per {config.REQUEST_RATE_PERIOD} seconds"],
-        storage_uri="memory://"
+        default_limits=[f"{config.REQUEST_RATE_LIMIT} per {config.REQUEST_RATE_PERIOD} seconds"]
     )
 
 
@@ -95,38 +92,16 @@ def _register_error_handlers(app):
 
 
 def _register_global_objects(app):
-    try:
-        app.paper_manager = PaperManager()
-        app.logger.info("PaperManager initialized")
-    except Exception as e:
-        app.logger.error(f"PaperManager init failed: {e}", exc_info=True)
-        app.paper_manager = None
+    app.paper_manager = PaperManager()
 
     @app.route('/')
     def index():
         return render_template('index.html')
 
 
-try:
-    app = create_app()
-    print("Flask app created successfully", flush=True)
-except Exception as e:
-    print(f"CRITICAL: create_app() failed: {e}", flush=True)
-    import traceback
-    traceback.print_exc()
-    # Fallback: create minimal Flask app so gunicorn can start
-    from flask import Flask as _Flask
-    app = _Flask(__name__)
-
-    @app.route('/')
-    def _fallback_index():
-        return f'<h1>App startup error</h1><pre>{e}</pre>'
-
-    @app.route('/api/health')
-    def _fallback_health():
-        return {'status': 'error', 'message': str(e)}, 500
-
 if __name__ == '__main__':
+    app = create_app()
+
     print("=" * 60)
     print("  论文知识图谱系统 (DeepSeek AI 驱动)")
     print(f"  访问地址: http://localhost:{config.PORT}")

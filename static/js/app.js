@@ -1260,8 +1260,13 @@ function showPaperDetail(paperId) {
         <div class="detail-authors">👥 ${authors}</div>
 
         <div class="detail-section">
-            <div class="detail-section-title">📝 论文摘要</div>
-            <div class="detail-abstract">${paper.summary || '暂无摘要'}</div>
+            <div class="detail-section-title" style="display:flex;justify-content:space-between;align-items:center">
+                <span>📝 论文摘要</span>
+                <button class="translate-btn" onclick="translatePaperText('${paperId}', 'summary')" id="translateSummaryBtn">
+                    🌐 一键翻译
+                </button>
+            </div>
+            <div class="detail-abstract" id="paperSummary_${paperId}">${paper.summary || '暂无摘要'}</div>
         </div>
 
         <div id="modalAiSection" class="detail-section">
@@ -1306,6 +1311,63 @@ function showPaperDetail(paperId) {
 
 function closeModal() {
     document.getElementById('paperModal').classList.add('hidden');
+}
+
+// ============ 一键翻译 ============
+
+function translatePaperText(paperId, field) {
+    const paper = currentPaperData[paperId];
+    if (!paper) return;
+
+    const btn = document.getElementById('translateSummaryBtn');
+    if (!btn) return;
+
+    const originalText = field === 'summary' ? (paper.summary || '') : (paper.title || '');
+    if (!originalText.trim()) {
+        showToast('⚠️ 没有可翻译的内容');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:4px"></span>翻译中...';
+
+    fetch('/api/translate_text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            text: originalText,
+            source_lang: 'en',
+            target_lang: 'zh'
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showToast('⚠️ ' + data.error);
+            return;
+        }
+        const container = document.getElementById('paperSummary_' + paperId);
+        if (container) {
+            container.innerHTML = `
+                <div style="color: var(--text-primary); line-height: 1.7;">${data.translated}</div>
+                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border);">
+                    <div style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px;">原文：</div>
+                    <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">${data.original}</div>
+                </div>
+            `;
+        }
+        btn.innerHTML = '✅ 已翻译';
+        btn.style.background = '#dcfce7';
+        btn.style.color = '#166534';
+        btn.style.borderColor = '#86efac';
+        showToast('✅ 翻译完成');
+    })
+    .catch(error => {
+        console.error('Translation error:', error);
+        btn.disabled = false;
+        btn.innerHTML = '🌐 一键翻译';
+        showToast('⚠️ 翻译失败，请稍后重试');
+    });
 }
 
 // ============ AI摘要 ============

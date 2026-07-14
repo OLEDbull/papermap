@@ -2539,6 +2539,40 @@ body {
     box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
 }
 
+/* 一键翻译按钮 */
+.translate-btn {
+    padding: 6px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.translate-btn:hover {
+    background: var(--primary-lighter);
+    border-color: var(--primary-light);
+    transform: translateY(-1px);
+}
+
+.translate-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.translate-btn .loading-spinner {
+    border-color: var(--primary-light);
+    border-top-color: transparent;
+}
+
 .btn-outline {
     background: var(--bg-card);
     color: var(--text-secondary);

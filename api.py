@@ -1,17 +1,21 @@
 from flask import Blueprint, request, jsonify, send_from_directory, current_app
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import os
 import logging
 
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger(__name__)
 
-
-@api_bp.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'ok', 'service': 'PaperMap'}), 200
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["60 per 60 seconds"],
+    storage_uri="memory://"
+)
 
 
 @api_bp.route('/search', methods=['GET'])
+@limiter.limit("30 per minute")
 def search_papers():
     """搜索论文：中文关键词自动翻译 → arXiv检索 → 时间排序 → 时间线总结"""
     query = request.args.get('q', '').strip()
@@ -40,6 +44,7 @@ def search_papers():
 
 
 @api_bp.route('/translate', methods=['GET'])
+@limiter.limit("60 per minute")
 def translate_keyword():
     """翻译中文关键词为英文科研术语"""
     keyword = request.args.get('q', '').strip()
@@ -55,6 +60,7 @@ def translate_keyword():
 
 
 @api_bp.route('/timeline', methods=['GET'])
+@limiter.limit("30 per minute")
 def get_timeline():
     """获取时间线数据"""
     query = request.args.get('q', '')
@@ -75,6 +81,7 @@ def get_timeline():
 
 
 @api_bp.route('/paper/<paper_id>/summary', methods=['GET'])
+@limiter.limit("60 per minute")
 def get_summary(paper_id):
     """获取论文AI摘要"""
     paper_data = None
@@ -100,6 +107,7 @@ def get_summary(paper_id):
 
 
 @api_bp.route('/paper/<paper_id>/design', methods=['GET'])
+@limiter.limit("30 per minute")
 def get_design_doc(paper_id):
     """获取论文复现设计文档"""
     paper_data = None
@@ -125,6 +133,7 @@ def get_design_doc(paper_id):
 
 
 @api_bp.route('/paper/<paper_id>/download', methods=['GET'])
+@limiter.limit("20 per minute")
 def download_paper(paper_id):
     """下载论文PDF"""
     try:
@@ -142,7 +151,41 @@ def download_paper(paper_id):
         return jsonify({'error': '下载论文时发生错误'}), 500
 
 
+@api_bp.route('/translate_text', methods=['POST'])
+@limiter.limit("60 per minute")
+def translate_text():
+    """翻译论文标题和摘要：英文 → 中文
+
+    默认使用免费的 Argos Translate（离线），
+    传入 use_ai=true 可使用 DeepSeek AI 高质量翻译（消耗 token）。
+    """
+    data = request.get_json() or {}
+    text = data.get('text', '').strip()
+    source_lang = data.get('source_lang', 'en')
+    target_lang = data.get('target_lang', 'zh')
+    use_ai = data.get('use_ai', False)
+
+    if not text:
+        return jsonify({'error': '请提供需要翻译的文本'}), 400
+
+    try:
+        translated = current_app.paper_manager.summarizer.translate_text(
+            text, source_lang, target_lang, use_ai=use_ai
+        )
+        return jsonify({
+            'original': text,
+            'translated': translated,
+            'source_lang': source_lang,
+            'target_lang': target_lang,
+            'engine': 'deepseek' if use_ai else 'free'
+        })
+    except Exception as e:
+        logger.error(f"Translation error: {e}", exc_info=True)
+        return jsonify({'error': '翻译过程中发生错误'}), 500
+
+
 @api_bp.route('/statistics', methods=['GET'])
+@limiter.limit("30 per minute")
 def get_statistics():
     query = request.args.get('q', '')
     if not query:
@@ -162,6 +205,7 @@ def get_statistics():
 
 
 @api_bp.route('/graph', methods=['GET'])
+@limiter.limit("30 per minute")
 def get_graph():
     query = request.args.get('q', '')
     if not query:

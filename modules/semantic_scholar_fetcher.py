@@ -82,7 +82,7 @@ class SemanticScholarFetcher:
         for attempt in range(3):
             try:
                 req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=15) as response:
+                with urllib.request.urlopen(req, timeout=30) as response:
                     data = json.loads(response.read().decode('utf-8'))
                 raw_papers = data.get('data', [])
                 return [self._parse_paper(p) for p in raw_papers]

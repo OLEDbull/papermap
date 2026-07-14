@@ -13,3 +13,7 @@ papers/
 .DS_Store
 Thumbs.db
 *.log
+.trae/documents/
+.pytest_cache/
+docs/
+.github/
