@@ -872,27 +872,25 @@ function switchAnalysisTab(tab) {
 }
 
 function renderTechEvolution(data) {
-    const milestones = data.milestones || [];
-    if (milestones.length === 0) return '<div class="empty-panel">暂无技术演进数据</div>';
+    const timeline = data.timeline || {};
 
     let html = '<div class="evolution-timeline">';
-    const years = [...new Set(milestones.map(m => m.first_seen))].sort();
+    const years = Object.keys(timeline).map(Number).sort((a, b) => a - b);
+
+    if (years.length === 0) return '<div class="empty-panel">暂无技术演进数据</div>';
 
     years.forEach(year => {
-        const yearMilestones = milestones.filter(m => m.first_seen === year);
+        const yearKeywords = timeline[year] || [];
         html += `
             <div class="evolution-year">
                 <div class="evolution-year-label">${year}</div>
-                <div class="evolution-milestones">
-                    ${yearMilestones.map(m => `
-                        <div class="evolution-milestone ${m.type}">
-                            <div class="milestone-method">${m.method}</div>
-                            <div class="milestone-meta">
-                                <span class="milestone-count">${m.count}篇</span>
-                                <span class="milestone-impact">⭐${m.avg_impact}</span>
-                            </div>
-                        </div>
-                    `).join('')}
+                <div class="evolution-keywords">
+                    ${yearKeywords.length > 0 ? yearKeywords.map(k => `
+                        <span class="keyword-tag" style="--impact-color: ${getImpactColor(k.avg_impact)}">
+                            ${k.keyword}
+                            <span class="keyword-count">${k.count}</span>
+                        </span>
+                    `).join('') : '<span class="keyword-empty">暂无关键词</span>'}
                 </div>
             </div>
         `;
@@ -900,6 +898,12 @@ function renderTechEvolution(data) {
 
     html += '</div>';
     return html;
+}
+
+function getImpactColor(impact) {
+    if (impact >= 7) return '#f59e0b';
+    if (impact >= 5) return '#3b82f6';
+    return '#6b7280';
 }
 
 function renderResearcherGraph(data) {

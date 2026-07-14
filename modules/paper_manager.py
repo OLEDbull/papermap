@@ -607,16 +607,113 @@ class PaperManager:
             'active_periods': len(set(years)) if years else 0
         }
 
+    def _extract_keywords(self, paper: Dict[str, Any]) -> List[str]:
+        """从论文中提取技术关键词"""
+        keywords = set()
+
+        title = paper.get('title', '').lower()
+        summary = paper.get('summary', '').lower()
+
+        stopwords = {
+            'result', 'results', 'work', 'works', 'paper', 'papers', 'method', 'methods',
+            'approach', 'approaches', 'algorithm', 'algorithms', 'model', 'models',
+            'network', 'networks', 'framework', 'frameworks', 'technique', 'techniques',
+            'system', 'systems', 'problem', 'problems', 'task', 'tasks', 'application',
+            'applications', 'study', 'studies', 'research', 'investigation', 'analysis',
+            'evaluation', 'experiments', 'experimental', 'performance', 'comparison',
+            'baseline', 'baselines', 'dataset', 'datasets', 'data', 'datum', 'training',
+            'testing', 'validation', 'evaluation', 'metric', 'metrics', 'accuracy',
+            'precision', 'recall', 'f1', 'score', 'scores', 'state-of-the-art', 'sota',
+            'novel', 'new', 'proposed', 'introduce', 'present', 'develop', 'design',
+            'implement', 'evaluate', 'show', 'demonstrate', 'achieve', 'improve',
+            'outperform', 'better', 'best', 'first', 'large', 'small', 'recent', 'previous',
+            'current', 'existing', 'traditional', 'modern', 'deep', 'shallow', 'neural',
+            'learning', 'machine', 'artificial', 'intelligence', 'computational',
+            'based', 'using', 'via', 'with', 'for', 'on', 'in', 'of', 'and', 'or', 'we',
+            'our', 'this', 'that', 'these', 'those', 'they', 'their', 'it', 'its', 'an', 'a', 'the'
+        }
+
+        tech_keywords = [
+            'transformer', 'attention mechanism', 'multi-head attention', 'self-attention',
+            'diffusion model', 'denoising diffusion', 'stable diffusion', 'controlnet',
+            'graph neural network', 'gnn', 'graph convolutional', 'gcn', 'gat', 'graph attention',
+            'reinforcement learning', 'rl', 'deep reinforcement', 'policy gradient', 'actor-critic',
+            'generative adversarial', 'gan', 'stylegan', 'biggan', 'cyclegan',
+            'convolutional neural', 'cnn', 'resnet', 'vgg', 'inception', 'densenet',
+            'recurrent neural', 'rnn', 'lstm', 'gru', 'bidirectional',
+            'bert', 'roberta', 'electra', 'albert', 'deberta',
+            'gpt', 'gpt-2', 'gpt-3', 'gpt-4', 'gpt-5',
+            'clip', 'contrastive language image', 'flamingo', 'blip', 'blip-2',
+            'imagen', 'dall-e', 'dall-e 2', 'dall-e 3', 'stable diffusion',
+            'large language model', 'llm', 'foundation model', 'multimodal model',
+            'vision language model', 'vlm', 'visual language', 'vision-language',
+            'pre-training', 'pretraining', 'fine-tuning', 'finetuning', 'prompt tuning',
+            'instruction tuning', 'alignment', 'rlhf', 'direct preference',
+            'few-shot', 'few shot', 'zero-shot', 'zero shot', 'one-shot',
+            'self-supervised learning', 'contrastive learning', 'masked autoencoder',
+            'meta-learning', 'maml', 'few-shot learning', 'learning to learn',
+            'adversarial training', 'domain adaptation', 'transfer learning',
+            'federated learning', 'privacy preserving', 'differential privacy',
+            'quantization', 'model compression', 'knowledge distillation', 'pruning',
+            'mixture of experts', 'moe', 'sparse model', 'adapter', 'lora', 'low-rank',
+            'retrieval augmented', 'rag', 'retrieval-based', 'memory augmented',
+            'agent', 'ai agent', 'planning', 'reasoning', 'chain of thought', 'cot',
+            'tool use', 'tool learning', 'function calling',
+            'embedding', 'text embedding', 'image embedding', 'multimodal embedding',
+            'tokenization', 'byte pair', 'sentencepiece', 'wordpiece',
+            'decoding', 'beam search', 'top-k', 'top-p', 'nucleus sampling',
+            'scaling law', 'efficiency', 'inference speed', 'training efficiency',
+            'encoder-decoder', 'decoder-only', 'encoder-only',
+            'visual grounding', 'object detection', 'image segmentation', 'instance segmentation',
+            'video understanding', 'action recognition', 'video generation',
+            'navigation', 'vln', 'visual navigation', 'embodied ai', 'embodied learning',
+            'question answering', 'visual qa', 'vqa', 'text qa',
+            'summarization', 'text summarization', 'video summarization',
+            'machine translation', 'neural machine', 'zero-shot translation',
+            'image captioning', 'video captioning', 'image generation', 'text-to-image',
+            'parsing', 'constituency parsing', 'dependency parsing', 'semantic parsing',
+            'representation learning', 'feature learning', 'metric learning',
+            'optimization', 'adam', 'sgd', 'learning rate', 'batch normalization',
+            'regularization', 'dropout', 'weight decay', 'label smoothing',
+            'benchmark', 'leaderboard', 'evaluation protocol', 'standard dataset',
+            'openai', 'google', 'meta', 'microsoft', 'deepmind', 'anthropic',
+            'stanford', 'mit', 'cmu', 'berkeley', 'eth zurich', 'max planck',
+            'arxiv', 'iclr', 'icml', 'neurips', 'acl', 'emnlp', 'cvpr', 'eccv', 'iccv',
+            'aaai', 'ijcai', 'sigir', 'kdd', 'wsdm', 'www'
+        ]
+
+        for kw in tech_keywords:
+            if kw in title or kw in summary:
+                keywords.add(kw)
+
+        ai_sum = paper.get('ai_summary', {})
+        methods = ai_sum.get('methods', [])
+        for method in methods:
+            m = method.lower().strip()
+            if len(m) > 3 and len(m) < 50:
+                parts = m.replace('-', ' ').replace('_', ' ').split()
+                filtered = [p for p in parts if len(p) >= 3 and p not in stopwords]
+                if len(filtered) >= 2:
+                    keywords.add(' '.join(filtered[:3]))
+                elif len(filtered) == 1 and filtered[0] not in stopwords:
+                    keywords.add(filtered[0])
+
+        for cat in paper.get('categories', []):
+            if any(prefix in cat for prefix in ['cs.', 'stat.', 'q-bio.', 'q-fin.']):
+                keywords.add(cat)
+
+        keywords = {k for k in keywords if k not in stopwords}
+
+        return list(keywords)[:8]
+
     def _build_tech_evolution(self, papers: List[Dict[str, Any]]) -> Dict[str, Any]:
         """构建技术演进路线图"""
         if not papers:
-            return {'milestones': [], 'timeline': {}}
+            return {'timeline': {}}
 
-        method_timeline = defaultdict(lambda: {'count': 0, 'first_seen': None, 'key_papers': [], 'impact_sum': 0})
+        year_keywords = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'impact_sum': 0, 'papers': []}))
 
         for p in papers:
-            ai_sum = p.get('ai_summary', {})
-            methods = ai_sum.get('methods', [])
             pub_date = p.get('published', '')
             impact = p.get('impact_factor', 0)
 
@@ -628,48 +725,66 @@ class PaperManager:
                 except Exception:
                     continue
 
-            for method in methods:
-                m = method.strip()
-                if len(m) > 3:
-                    method_timeline[m]['count'] += 1
-                    method_timeline[m]['impact_sum'] += impact
-                    if method_timeline[m]['first_seen'] is None or year < method_timeline[m]['first_seen']:
-                        method_timeline[m]['first_seen'] = year
-                    if len(method_timeline[m]['key_papers']) < 3:
-                        method_timeline[m]['key_papers'].append({
-                            'id': p['id'],
-                            'title': p['title'],
-                            'year': year,
-                            'impact': impact
-                        })
+            keywords = self._extract_keywords(p)
+            for kw in keywords:
+                year_keywords[year][kw]['count'] += 1
+                year_keywords[year][kw]['impact_sum'] += impact
+                if len(year_keywords[year][kw]['papers']) < 2:
+                    year_keywords[year][kw]['papers'].append({
+                        'id': p['id'],
+                        'title': p['title'][:50],
+                        'impact': impact
+                    })
 
-        sorted_methods = sorted(
-            method_timeline.items(),
-            key=lambda x: (x[1]['first_seen'], -x[1]['count'])
+        years = []
+        for year in year_keywords:
+            years.append(year)
+
+        if not years:
+            return {'timeline': {}}
+
+        min_year = min(years)
+        max_year = max(years)
+
+        all_keywords = defaultdict(int)
+        for year in year_keywords:
+            for kw in year_keywords[year]:
+                all_keywords[kw] += year_keywords[year][kw]['count']
+
+        total_papers = sum(
+            sum(year_keywords[year][kw]['count'] for kw in year_keywords[year])
+            for year in year_keywords
         )
 
-        milestones = []
-        for method, data in sorted_methods[:15]:
-            avg_impact = data['impact_sum'] / max(1, data['count'])
-            milestone_type = 'breakthrough' if avg_impact > 6 else 'major' if data['count'] >= 5 else 'minor'
+        common_keywords = set()
+        for kw, total_count in all_keywords.items():
+            if total_count > total_papers * 0.8:
+                common_keywords.add(kw)
 
-            milestones.append({
-                'method': method,
-                'first_seen': data['first_seen'],
-                'count': data['count'],
-                'avg_impact': round(avg_impact, 1),
-                'type': milestone_type,
-                'key_papers': data['key_papers'][:3]
-            })
+        timeline = {}
+        for year in range(min_year, max_year + 1):
+            if year in year_keywords:
+                keywords = []
+                for kw, data in year_keywords[year].items():
+                    avg_impact = data['impact_sum'] / max(1, data['count'])
+                    if len(kw) < 3 or len(kw) > 40:
+                        continue
+                    if data['count'] < 2 and avg_impact < 5:
+                        continue
+                    if kw in common_keywords:
+                        continue
+                    keywords.append({
+                        'keyword': kw.replace('-', ' '),
+                        'count': data['count'],
+                        'avg_impact': round(avg_impact, 1),
+                        'papers': data['papers']
+                    })
+                keywords.sort(key=lambda x: (-x['avg_impact'], -x['count']))
+                timeline[str(year)] = keywords[:8]
+            else:
+                timeline[str(year)] = []
 
-        timeline = defaultdict(list)
-        for m in milestones:
-            timeline[m['first_seen']].append(m)
-
-        return {
-            'milestones': milestones,
-            'timeline': dict(sorted(timeline.items()))
-        }
+        return {'timeline': timeline}
 
     def _build_researcher_graph(self, papers: List[Dict[str, Any]]) -> Dict[str, Any]:
         """构建核心研究者图谱"""
