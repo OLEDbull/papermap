@@ -105,9 +105,9 @@ def _register_global_objects(app):
         return render_template('index.html')
 
 
-if __name__ == '__main__':
-    app = create_app()
+app = create_app()
 
+if __name__ == '__main__':
     print("=" * 60)
     print("  论文知识图谱系统 (DeepSeek AI 驱动)")
     print(f"  访问地址: http://localhost:{config.PORT}")
