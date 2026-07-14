@@ -47,4 +47,6 @@ REQUEST_RATE_PERIOD = int(os.getenv('REQUEST_RATE_PERIOD', '60'))
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 LOG_FILE = os.path.join(LOG_DIR, os.getenv('LOG_FILE', 'app.log'))
 
-assert AI_API_KEY, "AI_API_KEY must be set in .env file or environment variables"
+if not AI_API_KEY:
+    import warnings
+    warnings.warn("AI_API_KEY not set - AI features will be disabled, falling back to mock mode")
