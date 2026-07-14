@@ -10,8 +10,5 @@ COPY . .
 ENV FLASK_ENV=production
 ENV FLASK_DEBUG=false
 ENV HOST=0.0.0.0
-ENV PORT=5000
 
-EXPOSE 5000
-
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "wsgi:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 4 --timeout 120 wsgi:app"]
