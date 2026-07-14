@@ -4,13 +4,25 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: AI_API_KEY
-        sync: false  # 在 Render 控制台手动设置
+        sync: false
+      - key: AI_API_URL
+        value: https://api.deepseek.com/v1/chat/completions
+      - key: AI_PROVIDER
+        value: deepseek
+      - key: AI_MODEL
+        value: deepseek-chat
+      - key: AI_TIMEOUT
+        value: 45
       - key: ARXIV_MAX_RESULTS
-        value: 100
-      - key: S2_MAX_RESULTS
         value: 80
+      - key: S2_MAX_RESULTS
+        value: 60
+      - key: FLASK_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: DEBUG

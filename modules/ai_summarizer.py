@@ -20,10 +20,6 @@ class AISummarizer:
         self.temperature: float = config.AI_TEMPERATURE
 
     def _call_deepseek(self, prompt: str, temperature: float = None, max_tokens: int = None) -> Optional[Dict[str, Any]]:
-        if not self.api_key:
-            logger.warning("DeepSeek API key not configured, skipping API call")
-            return None
-            
         try:
             headers = {
                 'Authorization': f'Bearer {self.api_key}',
@@ -42,35 +38,15 @@ class AISummarizer:
                 json=data,
                 timeout=self.timeout
             )
-            
-            if response.status_code == 429:
-                logger.warning("DeepSeek API rate limited")
-                return None
-                
             response.raise_for_status()
             result = response.json()
-            
-            if 'choices' not in result or not result['choices']:
-                logger.error("DeepSeek API returned empty choices")
-                return None
-                
             content = result['choices'][0]['message']['content']
-            
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                logger.warning("DeepSeek returned non-JSON content, trying to parse")
-                cleaned = content.strip()
-                if cleaned.startswith('```json'):
-                    cleaned = cleaned[7:-3].strip()
-                try:
-                    return json.loads(cleaned)
-                except:
-                    logger.error(f"Failed to parse DeepSeek response: {content[:200]}")
-                    return None
-                    
+            return json.loads(content)
         except requests.exceptions.RequestException as e:
             logger.error(f"DeepSeek API request error: {e}")
+            return None
+        except (KeyError, json.JSONDecodeError) as e:
+            logger.error(f"DeepSeek API response parsing error: {e}")
             return None
         except Exception as e:
             logger.error(f"DeepSeek API unknown error: {e}", exc_info=True)
@@ -81,8 +57,7 @@ class AISummarizer:
             return keyword
 
         if self.provider == 'deepseek' and self.api_key:
-            try:
-                prompt = f"""你是一个科研领域的专业翻译。请将以下中文关键词翻译为英文科研专业术语，用于在arXiv等学术数据库中检索相关论文。
+            prompt = f"""你是一个科研领域的专业翻译。请将以下中文关键词翻译为英文科研专业术语，用于在arXiv等学术数据库中检索相关论文。
 
 要求：
 1. 返回最常用的学术英文表达
@@ -93,12 +68,10 @@ class AISummarizer:
 
 请返回JSON格式：{{"translated": "英文术语", "alternatives": ["备选术语1", "备选术语2"]}}"""
 
-                result = self._call_deepseek(prompt, temperature=0.3, max_tokens=200)
-                if result and 'translated' in result:
-                    logger.info(f"Translated '{keyword}' to '{result['translated']}'")
-                    return result['translated']
-            except Exception as e:
-                logger.warning(f"AI translation failed, using local translation: {e}")
+            result = self._call_deepseek(prompt, temperature=0.3, max_tokens=200)
+            if result and 'translated' in result:
+                logger.info(f"Translated '{keyword}' to '{result['translated']}'")
+                return result['translated']
 
         return self._local_translate(keyword)
 
