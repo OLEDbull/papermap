@@ -31,6 +31,12 @@ def create_app(config_obj=None):
     _register_error_handlers(app)
     _register_global_objects(app)
 
+    try:
+        from whitenoise import WhiteNoise
+        app.wsgi_app = WhiteNoise(app.wsgi_app, root='static/', prefix='static/')
+    except ImportError:
+        pass
+
     return app
 
 
