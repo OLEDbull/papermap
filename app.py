@@ -1,7 +1,6 @@
 import os
 import sys
 import logging
-from logging.handlers import RotatingFileHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -31,18 +30,13 @@ def create_app(config_obj=None):
     _register_error_handlers(app)
     _register_global_objects(app)
 
-    try:
-        from whitenoise import WhiteNoise
-        app.wsgi_app = WhiteNoise(app.wsgi_app, root='static/', prefix='static/')
-    except ImportError:
-        pass
-
+    app.logger.info("Application initialized successfully")
     return app
 
 
 def _setup_logging(app):
     logger = logging.getLogger()
-    logger.setLevel(getattr(logging, config.LOG_LEVEL))
+    logger.setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
 
     formatter = logging.Formatter(
         '%(asctime)s %(levelname)s %(name)s %(message)s'
@@ -52,16 +46,18 @@ def _setup_logging(app):
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    file_handler = RotatingFileHandler(
-        config.LOG_FILE,
-        maxBytes=1024 * 1024 * 10,
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    app.logger.info(f"Application initialized with {config.FLASK_ENV} environment")
+    try:
+        from logging.handlers import RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            config.LOG_FILE,
+            maxBytes=1024 * 1024 * 10,
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        app.logger.warning(f"File logging disabled: {e}")
 
 
 def _setup_extensions(app):
@@ -70,7 +66,8 @@ def _setup_extensions(app):
     Limiter(
         app=app,
         key_func=get_remote_address,
-        default_limits=[f"{config.REQUEST_RATE_LIMIT} per {config.REQUEST_RATE_PERIOD} seconds"]
+        default_limits=[f"{config.REQUEST_RATE_LIMIT} per {config.REQUEST_RATE_PERIOD} seconds"],
+        storage_uri="memory://"
     )
 
 
@@ -98,7 +95,12 @@ def _register_error_handlers(app):
 
 
 def _register_global_objects(app):
-    app.paper_manager = PaperManager()
+    try:
+        app.paper_manager = PaperManager()
+        app.logger.info("PaperManager initialized")
+    except Exception as e:
+        app.logger.error(f"PaperManager init failed: {e}", exc_info=True)
+        app.paper_manager = None
 
     @app.route('/')
     def index():
