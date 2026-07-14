@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaperMap · AI 科研知识图谱 - 初赛作品</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #1a1a2e;
+            --accent: #e94560;
+            --gold: #f4d03f;
+            --text: #2c3e50;
+            --text-light: #5d6d7e;
+            --bg: #f8f9fa;
+            --bg-card: #ffffff;
+            --border: #e8e8e8;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, #16213e 100%);
+            color: white;
+            padding: 60px 40px;
+            text-align: center;
+        }
+        .header-badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.15);
+            padding: 6px 20px;
+            border-radius: 20px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .header h1 {
+            font-family: 'Noto Serif SC', serif;
+            font-size: 40px;
+            margin-bottom: 12px;
+        }
+        .header h1 span { color: var(--accent); }
+        .header p { font-size: 18px; opacity: 0.9; }
+        .header-links {
+            margin-top: 28px;
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .header-link {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .header-link:hover { background: rgba(255,255,255,0.2); }
+
+        /* Section */
+        .section {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 50px 30px;
+        }
+        .section-title {
+            font-family: 'Noto Serif SC', serif;
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 28px;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+        .section-desc {
+            color: var(--text-light);
+            margin-bottom: 30px;
+            font-size: 15px;
+        }
+
+        /* Screenshot Card */
+        .screenshot-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+            border: 1px solid var(--border);
+            margin-bottom: 40px;
+        }
+        .screenshot-img {
+            width: 100%;
+            display: block;
+            border-bottom: 1px solid var(--border);
+        }
+        .screenshot-info {
+            padding: 24px 28px;
+        }
+        .screenshot-info h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--primary);
+        }
+        .screenshot-info p {
+            font-size: 14px;
+            color: var(--text-light);
+            line-height: 1.8;
+        }
+        .screenshot-tags {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+        .screenshot-tag {
+            background: #f1f5f9;
+            color: var(--text-light);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+
+        /* Feature List */
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+        .feature-item {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+        }
+        .feature-item h4 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--primary);
+        }
+        .feature-item p {
+            font-size: 13px;
+            color: var(--text-light);
+            line-height: 1.7;
+        }
+
+        /* Tech Stack */
+        .tech-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        .tech-chip {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 8px 18px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* Demo Section */
+        .demo-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 16px;
+            padding: 40px;
+            text-align: center;
+        }
+        .demo-box h3 {
+            font-size: 22px;
+            margin-bottom: 12px;
+        }
+        .demo-box p {
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+        .demo-btn {
+            display: inline-block;
+            background: white;
+            color: #667eea;
+            padding: 12px 32px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+        .demo-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-light);
+            font-size: 13px;
+            border-top: 1px solid var(--border);
+        }
+
+        @media (max-width: 768px) {
+            .header h1 { font-size: 28px; }
+            .feature-list { grid-template-columns: 1fr; }
+            .section { padding: 30px 20px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <div class="header">
+        <div class="header-badge">TRAE AI 创造力大赛 · 学习工作赛道 · 初赛作品</div>
+        <h1>PaperMap <span>·</span> AI 科研知识图谱</h1>
+        <p>输入领域关键词，AI 自动生成领域全景图——让科研调研从"数周"缩短到"分钟"</p>
+        <div class="header-links">
+            <a href="#demo" class="header-link">在线体验 Demo</a>
+            <a href="#features" class="header-link">核心功能</a>
+            <a href="#screenshots" class="header-link">界面截图</a>
+        </div>
+    </div>
+
+    <!-- 项目简介 -->
+    <div class="section">
+        <h2 class="section-title">项目简介</h2>
+        <p class="section-desc">PaperMap 是一个面向科研工作者的 AI 辅助文献调研工具。输入任意研究领域关键词，系统自动从多个学术数据库聚合论文，通过 AI 生成影响力评分、技术演进时间线、论文关系图谱和领域 Top10 核心论文，帮助研究者快速掌握领域全貌。</p>
+        <div class="feature-list">
+            <div class="feature-item">
+                <h4>多源数据聚合</h4>
+                <p>同时接入 Semantic Scholar（期刊/顶会/综述）和 arXiv（预印本），覆盖更全面的学术来源</p>
+            </div>
+            <div class="feature-item">
+                <h4>批量 AI 分析</h4>
+                <p>DeepSeek API 批量处理，25篇/批，分析速度提升 10 倍以上</p>
+            </div>
+            <div class="feature-item">
+                <h4>真实引用量</h4>
+                <p>优先使用 Semantic Scholar 真实引用数据，AI 估算作为补充，标注来源</p>
+            </div>
+            <div class="feature-item">
+                <h4>可视化图谱</h4>
+                <p>D3.js 驱动的交互式论文关系图谱，支持聚类/自由双模式探索</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Demo -->
+    <div class="section" id="demo">
+        <div class="demo-box">
+            <h3>在线体验 Demo</h3>
+            <p>输入你感兴趣的科研领域，立即生成领域知识图谱</p>
+            <!-- 请将下方链接替换为你的实际部署地址 -->
+            <a href="http://localhost:5000" class="demo-btn" target="_blank">访问 Demo</a>
+            <p style="margin-top: 16px; font-size: 12px; opacity: 0.7;">建议搜索：视觉语言导航、大语言模型、图像生成、强化学习</p>
+        </div>
+    </div>
+
+    <!-- 界面截图 -->
+    <div class="section" id="screenshots">
+        <h2 class="section-title">界面截图</h2>
+        <p class="section-desc">以下截图展示了 PaperMap 的核心功能界面</p>
+
+        <!-- 截图1：论文关系图谱 -->
+        <div class="screenshot-card">
+            <!-- 请将 src 替换为你的实际图片路径，如 ./screenshots/graph.png -->
+            <img src="./screenshots/01-关系图谱.png" alt="论文关系图谱" class="screenshot-img" onerror="this.style.display='none'">
+            <div class="screenshot-info">
+                <h3>论文关系图谱</h3>
+                <p>D3.js 驱动的交互式知识图谱，节点代表论文，连线代表方法相似度。支持按方法聚类（聚类模式）和自由探索（自由模式）两种视图。左侧面板提供节点搜索、显示控制、节点大小调节和节点统计功能。金色边框标记突破性论文，悬停高亮关联节点。</p>
+                <div class="screenshot-tags">
+                    <span class="screenshot-tag">D3.js 可视化</span>
+                    <span class="screenshot-tag">力导向布局</span>
+                    <span class="screenshot-tag">方法聚类</span>
+                    <span class="screenshot-tag">交互探索</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 截图2：技术演进时间线 -->
+        <div class="screenshot-card">
+            <img src="./screenshots/02-时间线.png" alt="技术演进时间线" class="screenshot-img" onerror="this.style.display='none'">
+            <div class="screenshot-info">
+                <h3>技术演进时间线</h3>
+                <p>按时间段自动分组论文，AI 生成每个时段的研究总结、突破性方法识别和热点标签。横向滚动浏览领域从过去到现在的发展历程。每个时段展示 top 论文列表，展开后可查看完整论文信息和收藏功能。</p>
+                <div class="screenshot-tags">
+                    <span class="screenshot-tag">自适应时间粒度</span>
+                    <span class="screenshot-tag">AI 时段总结</span>
+                    <span class="screenshot-tag">突破性识别</span>
+                    <span class="screenshot-tag">横向滚动</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 截图3：技术演进分析 -->
+        <div class="screenshot-card">
+            <img src="./screenshots/03-技术演进.png" alt="技术演进分析" class="screenshot-img" onerror="this.style.display='none'">
+            <div class="screenshot-info">
+                <h3>技术演进分析</h3>
+                <p>Tab 切换查看多维分析：技术演进路线图（按年份展示领域方法发展脉络）、核心研究者图谱、入门阅读路径推荐、研究空白检测。每个维度都通过 AI 分析自动生成，帮助研究者从不同角度理解领域。</p>
+                <div class="screenshot-tags">
+                    <span class="screenshot-tag">技术演进路线</span>
+                    <span class="screenshot-tag">核心研究者</span>
+                    <span class="screenshot-tag">入门路径</span>
+                    <span class="screenshot-tag">研究空白</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 截图4：Top 10 论文 -->
+        <div class="screenshot-card">
+            <img src="./screenshots/04-Top10.png" alt="领域 Top 10 最具影响力论文" class="screenshot-img" onerror="this.style.display='none'">
+            <div class="screenshot-info">
+                <h3>领域 Top 10 最具影响力论文</h3>
+                <p>AI 综合评估论文的创新性、引用量、影响力因子，按年份分散选取保证时间多样性。双列卡片展示，标记论文类型（期刊/会议/预印本）、发表 venue、真实引用量（带 ✓ 标记）。金色边框标记经典必读论文，闪电标记突破性工作。</p>
+                <div class="screenshot-tags">
+                    <span class="screenshot-tag">跨时间多样性</span>
+                    <span class="screenshot-tag">真实引用量</span>
+                    <span class="screenshot-tag">venue 标注</span>
+                    <span class="screenshot-tag">影响力排序</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 截图5：TRAE 开发记录 -->
+        <div class="screenshot-card">
+            <img src="./screenshots/05-开发记录.png" alt="TRAE 开发记录" class="screenshot-img" onerror="this.style.display='none'">
+            <div class="screenshot-info">
+                <h3>TRAE AI 辅助开发</h3>
+                <p>本项目全程使用 TRAE IDE + AI 助手开发。从架构设计、代码生成、Bug 修复到性能优化，AI 助手参与了每一个环节。例如：从单一 arXiv 预印本扩展到多源聚合（Semantic Scholar + arXiv），AI 助手帮助完成了模块设计、代码编写和集成测试。</p>
+                <div class="screenshot-tags">
+                    <span class="screenshot-tag">TRAE IDE</span>
+                    <span class="screenshot-tag">AI 辅助编程</span>
+                    <span class="screenshot-tag">多轮迭代</span>
+                    <span class="screenshot-tag">性能优化</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 技术架构 -->
+    <div class="section">
+        <h2 class="section-title">技术架构</h2>
+        <p class="section-desc">基于 Flask + DeepSeek AI + 多源数据聚合的科研知识图谱系统</p>
+        <div class="tech-row">
+            <div class="tech-chip">Python Flask</div>
+            <div class="tech-chip">DeepSeek API</div>
+            <div class="tech-chip">Semantic Scholar API</div>
+            <div class="tech-chip">arXiv API</div>
+            <div class="tech-chip">D3.js</div>
+            <div class="tech-chip">HTML5 + CSS3</div>
+            <div class="tech-chip">JavaScript</div>
+            <div class="tech-chip">ThreadPoolExecutor</div>
+        </div>
+    </div>
+
+    <!-- 项目亮点 -->
+    <div class="section">
+        <h2 class="section-title">项目亮点</h2>
+        <div class="feature-list">
+            <div class="feature-item">
+                <h4>批量 AI 分析提速 10 倍</h4>
+                <p>将 DeepSeek API 调用从 200 次/搜索优化到 8 次/搜索（25 篇/批），论文评分阶段从 7-14 分钟缩短到 40 秒-1 分钟</p>
+            </div>
+            <div class="feature-item">
+                <h4>多源数据智能聚合</h4>
+                <p>首创同时接入 Semantic Scholar（真实引用量）和 arXiv（最新预印本），ThreadPool 并行获取，智能去重排序</p>
+            </div>
+            <div class="feature-item">
+                <h4>真实引用量 + AI 估算双轨制</h4>
+                <p>优先使用真实引用数据，缺失时 AI 估算并结合时间累积效应校正，引用量后标注 ✓ 表示真实数据</p>
+            </div>
+            <div class="feature-item">
+                <h4>技术演进全景可视化</h4>
+                <p>自适应时间粒度分组 + AI 时段总结 + 横向滚动时间线，配合论文关系图谱聚类/自由双模式</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 使用说明 -->
+    <div class="section">
+        <h2 class="section-title">使用说明</h2>
+        <div class="feature-list">
+            <div class="feature-item">
+                <h4>1. 搜索领域</h4>
+                <p>在顶部搜索框输入中文或英文领域关键词（如"视觉语言导航"），系统自动翻译并检索</p>
+            </div>
+            <div class="feature-item">
+                <h4>2. 查看时间线</h4>
+                <p>横向滚动浏览技术演进时间线，查看每个时段的 AI 总结和 top 论文</p>
+            </div>
+            <div class="feature-item">
+                <h4>3. 探索关系图谱</h4>
+                <p>点击"关系图"切换视图，拖动节点、缩放画布，探索论文之间的方法关联</p>
+            </div>
+            <div class="feature-item">
+                <h4>4. 查看分析报告</h4>
+                <p>切换"分析"标签页，查看技术演进路线、核心研究者、入门路径等深度分析</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <p>PaperMap · AI 科研知识图谱 | TRAE AI 创造力大赛 · 学习工作赛道</p>
+        <p style="margin-top: 8px;">全程使用 TRAE IDE + AI 助手开发</p>
+    </div>
+
+</body>
+</html>
