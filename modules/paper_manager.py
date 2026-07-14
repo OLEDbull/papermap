@@ -37,10 +37,16 @@ class PaperManager:
                 papers = self._get_demo_papers(translated_query)
 
             papers = sorted(papers, key=lambda x: x.get('published', ''), reverse=False)
-            logger.info(f"Found and sorted {len(papers)} papers (after dedup)")
+        logger.info(f"Found and sorted {len(papers)} papers (after dedup)")
 
-            logger.info(f"Generating summaries and impact scores for {len(papers)} papers (batch mode)...")
+        logger.info(f"Generating summaries and impact scores for {len(papers)} papers (batch mode)...")
+        try:
             batch_results = self.summarizer.summarize_papers_batch(papers, batch_size=25)
+        except Exception as e:
+            logger.error(f"Batch AI summarization failed: {e}, falling back to mock mode")
+            batch_results = {}
+            for p in papers:
+                batch_results[p['id']] = self.summarizer._mock_summarize(p)
 
             for paper in papers:
                 ai_summary = batch_results.get(paper['id'], {})

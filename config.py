@@ -35,7 +35,7 @@ S2_API_KEY = os.getenv('S2_API_KEY', '')  # 可选，提升速率限制
 
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'deepseek')
 AI_API_KEY = os.getenv('AI_API_KEY', '')
-AI_API_URL = os.getenv('AI_API_URL', 'https://api.deepseek.com/v1/chat/completions')
+AI_API_URL = os.getenv('AI_API_URL', 'https://api.deepseek.com/chat/completions')
 AI_MODEL = os.getenv('AI_MODEL', 'deepseek-chat')
 AI_TIMEOUT = int(os.getenv('AI_TIMEOUT', '60'))
 AI_MAX_TOKENS = int(os.getenv('AI_MAX_TOKENS', '2000'))
