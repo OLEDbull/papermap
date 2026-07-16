@@ -17,7 +17,7 @@ limiter = Limiter(
 @api_bp.route('/search', methods=['GET'])
 @limiter.limit("30 per minute")
 def search_papers():
-    """搜索论文：中文关键词自动翻译 → arXiv检索 → 时间排序 → 时间线总结"""
+    """搜索论文：快速返回（启发式评分）+ 后台深度AI分析"""
     query = request.args.get('q', '').strip()
     max_results = request.args.get('max', type=int)
 
@@ -31,16 +31,57 @@ def search_papers():
         if use_cache:
             cached = current_app.paper_manager.load_search(query)
             if cached:
-                logger.info(f"Returning cached results for query: {query}")
+                phase = cached.get('analysis_phase')
+                if phase is None:
+                    phase = 'deep'
+                is_running = current_app.paper_manager._analysis_tasks.get(query, False)
+                if (phase == 'fast' or phase == 'analyzing') and not is_running and phase != 'deep':
+                    current_app.paper_manager.start_deep_analysis(query, top_n=30)
+                logger.info(f"Returning cached results for query: {query} (phase: {phase})")
                 return jsonify(cached)
 
-        result = current_app.paper_manager.search_and_analyze(query, max_results)
-        logger.info(f"Search completed: {len(result.get('papers', []))} papers found")
+        result = current_app.paper_manager.search_fast(query, max_results)
+        current_app.paper_manager.start_deep_analysis(query, top_n=30)
+        logger.info(f"Fast search completed: {len(result.get('papers', []))} papers found")
         return jsonify(result)
 
     except Exception as e:
         logger.error(f"Search error: {e}", exc_info=True)
         return jsonify({'error': '搜索过程中发生错误'}), 500
+
+
+@api_bp.route('/search/status', methods=['GET'])
+@limiter.limit("60 per minute")
+def search_status():
+    """查询搜索分析状态"""
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'error': '请输入搜索关键词'}), 400
+
+    try:
+        status = current_app.paper_manager.get_analysis_status(query)
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Status check error: {e}", exc_info=True)
+        return jsonify({'error': '状态查询失败'}), 500
+
+
+@api_bp.route('/search/refresh', methods=['GET'])
+@limiter.limit("30 per minute")
+def search_refresh():
+    """获取最新的搜索结果（用于深度分析完成后刷新）"""
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'error': '请输入搜索关键词'}), 400
+
+    try:
+        cached = current_app.paper_manager.load_search(query)
+        if cached:
+            return jsonify(cached)
+        return jsonify({'error': '无搜索结果'}), 404
+    except Exception as e:
+        logger.error(f"Refresh error: {e}", exc_info=True)
+        return jsonify({'error': '刷新失败'}), 500
 
 
 @api_bp.route('/translate', methods=['GET'])
@@ -184,6 +225,47 @@ def translate_text():
         return jsonify({'error': '翻译过程中发生错误'}), 500
 
 
+@api_bp.route('/translate_batch', methods=['POST'])
+@limiter.limit("10 per minute")
+def translate_batch():
+    """批量翻译多篇论文文本：英文 → 中文（免费翻译）
+
+    最多支持 50 条文本，逐条调用免费翻译器，避免单次请求过大或超时。
+    返回每条文本的原文与译文，前端可用于替换摘要展示。
+    """
+    data = request.get_json() or {}
+    texts = data.get('texts', [])
+    source_lang = data.get('source_lang', 'en')
+    target_lang = data.get('target_lang', 'zh')
+
+    if not isinstance(texts, list) or not texts:
+        return jsonify({'error': '请提供需要翻译的文本列表'}), 400
+
+    # 限制最多 50 条，防止滥用
+    if len(texts) > 50:
+        return jsonify({'error': '单次最多翻译 50 条文本'}), 400
+
+    try:
+        results = []
+        for text in texts:
+            original = (text or '').strip()
+            if not original:
+                results.append({'original': '', 'translated': ''})
+                continue
+            translated = current_app.paper_manager.summarizer.translate_text(
+                original, source_lang, target_lang, use_ai=False
+            )
+            results.append({'original': original, 'translated': translated})
+
+        return jsonify({
+            'results': results,
+            'engine': 'free'
+        })
+    except Exception as e:
+        logger.error(f"Batch translation error: {e}", exc_info=True)
+        return jsonify({'error': '批量翻译过程中发生错误'}), 500
+
+
 @api_bp.route('/statistics', methods=['GET'])
 @limiter.limit("30 per minute")
 def get_statistics():
@@ -222,3 +304,69 @@ def get_graph():
     except Exception as e:
         logger.error(f"Graph error: {e}", exc_info=True)
         return jsonify({'error': '获取关系图数据时发生错误'}), 500
+
+
+@api_bp.route('/paper/<paper_id>/qa', methods=['POST'])
+@limiter.limit("15 per minute")
+def paper_qa(paper_id):
+    """针对某篇论文进行问答"""
+    data = request.get_json() or {}
+    question = data.get('question', '').strip()
+    history = data.get('history', [])
+    query = data.get('q', '')
+
+    if not question:
+        return jsonify({'error': '请输入问题'}), 400
+
+    try:
+        paper_data = None
+        if query:
+            cached = current_app.paper_manager.load_search(query)
+            if cached:
+                for p in cached.get('papers', []):
+                    if p.get('id') == paper_id:
+                        paper_data = p
+                        break
+
+        result = current_app.paper_manager.answer_question(paper_id, question, paper_data, history)
+        if not result:
+            return jsonify({'error': '论文未找到'}), 404
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Q&A error for paper {paper_id}: {e}", exc_info=True)
+        return jsonify({'error': '问答过程中发生错误'}), 500
+
+
+@api_bp.route('/compare', methods=['POST'])
+@limiter.limit("10 per minute")
+def compare_papers():
+    """对比两篇论文"""
+    data = request.get_json() or {}
+    paper_ids = data.get('paper_ids', [])
+    query = data.get('q', '')
+
+    if len(paper_ids) < 2:
+        return jsonify({'error': '请选择至少两篇论文进行对比'}), 400
+
+    try:
+        papers_data = []
+        if query:
+            cached = current_app.paper_manager.load_search(query)
+            if cached:
+                for pid in paper_ids:
+                    for p in cached.get('papers', []):
+                        if p.get('id') == pid:
+                            papers_data.append(p)
+                            break
+
+        result = current_app.paper_manager.compare_papers(paper_ids, papers_data if len(papers_data) >= 2 else None)
+        if not result:
+            return jsonify({'error': '对比失败，无法获取论文数据'}), 500
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Compare error: {e}", exc_info=True)
+        return jsonify({'error': '对比过程中发生错误'}), 500

@@ -4,6 +4,9 @@ let zoom;
 let nodeScale = 1;
 let forceRunning = true;
 let clusterMode = true;
+let selectedNode = null;
+let expandedNodes = new Set();
+let clickTimer = null;
 
 const colorMap = {
     'transformer': '#4f46e5',
@@ -181,7 +184,24 @@ function renderGraph(data) {
             resetHighlight();
         })
         .on('click', function(event, d) {
-            selectNode(d);
+            // 区分单击和双击
+            if (clickTimer) {
+                clearTimeout(clickTimer);
+                clickTimer = null;
+                // 双击：跳转到论文详情弹窗
+                selectNode(d);
+            } else {
+                clickTimer = setTimeout(() => {
+                    clickTimer = null;
+                    // 单击：展开/收起关联节点
+                    toggleExpandNode(d);
+                }, 250);
+            }
+            event.stopPropagation();
+        })
+        .on('dblclick', function(event, d) {
+            event.preventDefault();
+            event.stopPropagation();
         });
 
     nodeGroup.append('text')
@@ -353,11 +373,110 @@ function searchGraphNode(query) {
 }
 
 function selectNode(d) {
+    // 双击：跳转到论文详情弹窗
     if (typeof showPaperDetail === 'function') {
         if (!currentPaperData[d.id] && d) {
-            currentPaperData[d.id] = d;
+            // 补全论文数据字段，确保弹窗正常渲染
+            currentPaperData[d.id] = {
+                id: d.id,
+                title: d.title || '',
+                authors: d.authors || [],
+                summary: d.summary || '',
+                published: d.published || '',
+                categories: d.categories || [],
+                abs_url: d.abs_url || '',
+                pdf_url: d.pdf_url || '',
+                paper_type: d.paper_type || 'preprint',
+                venue: d.venue || '',
+                estimated_citations: d.citation_count || d.estimated_citations || 0,
+                impact_factor: d.impact_factor || 3.0,
+                novelty: d.novelty || 50,
+                is_breakthrough: d.breakthrough || false
+            };
         }
         showPaperDetail(d.id);
+    }
+}
+
+function toggleExpandNode(d) {
+    // 单击：高亮关联节点并展示连接信息
+    if (selectedNode && selectedNode.id === d.id) {
+        // 再次点击同一节点：取消选中
+        selectedNode = null;
+        expandedNodes.delete(d.id);
+        resetHighlight();
+        return;
+    }
+
+    selectedNode = d;
+    expandedNodes.add(d.id);
+
+    // 高亮关联节点
+    highlightConnected(d);
+
+    // 显示关联论文列表浮层
+    showConnectedPapers(d);
+}
+
+function showConnectedPapers(d) {
+    if (!graphData) return;
+
+    // 找出所有关联节点
+    const connected = [];
+    graphData.links.forEach(l => {
+        const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+        const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+        if (sourceId === d.id) {
+            const target = graphData.nodes.find(n => n.id === targetId);
+            if (target) connected.push({ node: target, link: l });
+        }
+        if (targetId === d.id) {
+            const source = graphData.nodes.find(n => n.id === sourceId);
+            if (source) connected.push({ node: source, link: l });
+        }
+    });
+
+    // 移除已有的关联面板
+    const existingPanel = document.getElementById('connectedPapersPanel');
+    if (existingPanel) existingPanel.remove();
+
+    if (connected.length === 0) return;
+
+    const typeMap = { method: '方法关联', author: '作者关联', timeline: '时间线', topic: '主题关联' };
+
+    // 创建关联论文浮层
+    const panel = document.createElement('div');
+    panel.id = 'connectedPapersPanel';
+    panel.className = 'connected-papers-panel';
+    panel.innerHTML = `
+        <div class="connected-panel-header">
+            <span class="connected-panel-title">🔗 关联论文 (${connected.length})</span>
+            <button class="connected-panel-close" onclick="this.parentElement.parentElement.remove()">✕</button>
+        </div>
+        <div class="connected-panel-current">
+            <div class="connected-current-label">当前节点：</div>
+            <div class="connected-current-title">${truncateText(d.title, 50)}</div>
+        </div>
+        <div class="connected-panel-list">
+            ${connected.map(({ node: n, link: l }) => {
+                const date = n.published ? new Date(n.published).toLocaleDateString('zh-CN') : '';
+                const authors = n.authors ? truncateText(n.authors.join(', '), 25) : 'Unknown';
+                return `
+                    <div class="connected-paper-item" onclick="selectNode(${JSON.stringify(n).replace(/"/g, '&quot;')})">
+                        <div class="connected-paper-type">${typeMap[l.type] || '关联'}</div>
+                        <div class="connected-paper-title">${truncateText(n.title, 40)}</div>
+                        <div class="connected-paper-meta">${date} | ${authors}</div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+
+    // 添加到图谱容器旁边
+    const graphView = document.getElementById('graphView');
+    if (graphView) {
+        graphView.style.position = 'relative';
+        graphView.appendChild(panel);
     }
 }
 

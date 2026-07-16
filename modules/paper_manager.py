@@ -22,12 +22,233 @@ class PaperManager:
         self.analyzer: RelationAnalyzer = RelationAnalyzer()
         self.data_dir: str = config.DATA_DIR
         self.papers_dir: str = config.PAPERS_DIR
+        self._analysis_tasks: Dict[str, bool] = {}
+        self._analysis_progress: Dict[str, Dict[str, Any]] = {}
+        self._translation_cache: Dict[str, str] = {}
+
+    def _get_translated_query(self, query: str) -> str:
+        """获取翻译后的查询词，带缓存"""
+        cache_key = query.strip().lower()
+        if cache_key in self._translation_cache:
+            logger.info(f"Translation cache hit for: {query}")
+            return self._translation_cache[cache_key]
+        translated = self.summarizer.translate_keyword(query)
+        self._translation_cache[cache_key] = translated
+        return translated
+
+    def search_fast(self, query: str, max_results: Optional[int] = None) -> Dict[str, Any]:
+        """快速搜索：只获取论文列表并用启发式规则快速评分，立即返回。
+        用户看到结果的时间从几十秒缩短到几秒。
+        """
+        try:
+            logger.info(f"Fast search for query: {query}")
+
+            translated_query = self._get_translated_query(query)
+            logger.info(f"Translated query: {translated_query}")
+
+            papers = self._fetch_multi_source(translated_query, max_results)
+            if not papers:
+                logger.warning(f"No papers found, using demo data for query: {translated_query}")
+                papers = self._get_demo_papers(translated_query)
+
+            papers = sorted(papers, key=lambda x: x.get('published', ''), reverse=False)
+            logger.info(f"Found {len(papers)} papers (fast mode)")
+
+            for paper in papers:
+                ai_summary = self.summarizer._mock_summarize(paper)
+                paper['ai_summary'] = ai_summary
+                paper['novelty'] = ai_summary.get('novelty', 50)
+                paper['impact_factor'] = ai_summary.get('impact_factor', 3.0)
+                paper['is_breakthrough'] = ai_summary.get('is_breakthrough', False)
+                real_citations = paper.get('citation_count', 0)
+                if real_citations and real_citations > 0:
+                    paper['estimated_citations'] = real_citations
+                    paper['citation_source'] = 'semantic_scholar'
+                else:
+                    raw_citations = ai_summary.get('estimated_citations', 100)
+                    paper['estimated_citations'] = self._adjust_citations(
+                        raw_citations, paper.get('published', ''),
+                        paper['is_breakthrough'], paper['impact_factor']
+                    )
+                    paper['citation_source'] = 'estimated'
+
+            graph_data = self.analyzer.analyze_relations(papers)
+            stats = self.analyzer.get_method_statistics(papers)
+            timeline = self._build_timeline(papers)
+            top_papers = self._build_top_papers(papers)
+            field_overview = self._build_field_overview(papers)
+            tech_evolution = self._build_tech_evolution(papers)
+            researcher_graph = self._build_researcher_graph(papers)
+            reading_path = self._build_reading_path(papers)
+            research_gaps = self._build_research_gaps(papers)
+
+            result = {
+                'query': query,
+                'translated_query': translated_query,
+                'total': len(papers),
+                'papers': papers,
+                'graph': graph_data,
+                'statistics': stats,
+                'timeline': timeline,
+                'top_papers': top_papers,
+                'field_overview': field_overview,
+                'tech_evolution': tech_evolution,
+                'researcher_graph': researcher_graph,
+                'reading_path': reading_path,
+                'research_gaps': research_gaps,
+                'analysis_phase': 'fast'
+            }
+
+            self._save_search(query, result)
+            logger.info(f"Fast search completed for query: {query}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Fast search error: {e}", exc_info=True)
+            raise
+
+    def start_deep_analysis(self, query: str, top_n: int = 30) -> bool:
+        """启动后台深度分析，对Top N篇论文进行AI深度分析。
+        非阻塞：立即返回，分析在后台线程中进行。
+        """
+        import threading
+
+        if query in self._analysis_tasks and self._analysis_tasks[query]:
+            logger.info(f"Deep analysis already running for query: {query}")
+            return False
+
+        self._analysis_tasks[query] = True
+        thread = threading.Thread(target=self._do_deep_analysis, args=(query, top_n), daemon=True)
+        thread.start()
+        logger.info(f"Started deep analysis thread for query: {query} (top {top_n})")
+        return True
+
+    def _do_deep_analysis(self, query: str, top_n: int = 30) -> None:
+        """执行深度分析的后台线程函数。
+        渐进式：每分析一小批（5篇）就保存一次，前端可以更早看到更新。
+        """
+        try:
+            logger.info(f"Deep analysis started for query: {query}, top {top_n}")
+
+            cached = self.load_search(query)
+            if not cached:
+                logger.warning(f"No cached result for deep analysis: {query}")
+                return
+
+            papers = cached.get('papers', [])
+            if not papers:
+                return
+
+            sorted_papers = sorted(papers, key=lambda x: x.get('estimated_citations', 0), reverse=True)
+            top_papers = sorted_papers[:top_n]
+            total = len(top_papers)
+
+            self._analysis_progress[query] = {
+                'total': total,
+                'completed': 0,
+                'current_batch': 0
+            }
+
+            logger.info(f"Deep analyzing {total} papers (progressive mode)...")
+
+            small_batch_size = 5
+            paper_dict = {p['id']: p for p in papers}
+
+            for batch_start in range(0, total, small_batch_size):
+                batch_end = min(batch_start + small_batch_size, total)
+                batch = top_papers[batch_start:batch_end]
+                batch_size = len(batch)
+
+                logger.info(f"Analyzing batch {batch_start//small_batch_size + 1}: papers {batch_start + 1}-{batch_end}/{total}")
+
+                batch_results = self.summarizer.summarize_papers_batch(batch, batch_size=batch_size)
+
+                for pid, ai_summary in batch_results.items():
+                    if pid in paper_dict:
+                        paper = paper_dict[pid]
+                        paper['ai_summary'] = ai_summary
+                        paper['novelty'] = ai_summary.get('novelty', paper.get('novelty', 50))
+                        paper['impact_factor'] = ai_summary.get('impact_factor', paper.get('impact_factor', 3.0))
+                        paper['is_breakthrough'] = ai_summary.get('is_breakthrough', paper.get('is_breakthrough', False))
+                        real_citations = paper.get('citation_count', 0)
+                        if not real_citations or real_citations == 0:
+                            raw_citations = ai_summary.get('estimated_citations', paper.get('estimated_citations', 100))
+                            paper['estimated_citations'] = self._adjust_citations(
+                                raw_citations, paper.get('published', ''),
+                                paper['is_breakthrough'], paper['impact_factor']
+                            )
+                            paper['citation_source'] = 'ai_estimated'
+
+                self._analysis_progress[query]['completed'] = batch_end
+
+                cached['papers'] = papers
+                cached['timeline'] = self._build_timeline(papers)
+                cached['top_papers'] = self._build_top_papers(papers)
+                cached['analysis_phase'] = 'analyzing'
+
+                self._save_search(query, cached)
+                logger.info(f"Batch {batch_start//small_batch_size + 1} done, saved progress ({batch_end}/{total})")
+
+            cached['analysis_phase'] = 'deep'
+            self._save_search(query, cached)
+
+            if query in self._analysis_progress:
+                self._analysis_progress[query]['completed'] = total
+
+            logger.info(f"Deep analysis completed for query: {query}")
+
+        except Exception as e:
+            logger.error(f"Deep analysis error: {e}", exc_info=True)
+        finally:
+            self._analysis_tasks[query] = False
+
+    def is_deep_analysis_done(self, query: str) -> bool:
+        """检查深度分析是否完成。"""
+        cached = self.load_search(query)
+        if cached and cached.get('analysis_phase') == 'deep':
+            return True
+        return False
+
+    def get_analysis_status(self, query: str) -> Dict[str, Any]:
+        """获取分析状态，包含详细进度。"""
+        cached = self.load_search(query)
+        if not cached:
+            return {'status': 'not_found'}
+
+        phase = cached.get('analysis_phase')
+        if phase is None:
+            phase = 'deep'
+        is_running = self._analysis_tasks.get(query, False)
+
+        progress = self._analysis_progress.get(query, {})
+        total = progress.get('total', 0)
+        completed = progress.get('completed', 0)
+        percent = 0
+        if total > 0:
+            percent = int((completed / total) * 100)
+
+        if phase == 'deep':
+            status = 'completed'
+            percent = 100
+        elif phase == 'analyzing' or is_running:
+            status = 'running'
+        else:
+            status = 'fast'
+
+        return {
+            'status': status,
+            'phase': phase,
+            'total': cached.get('total', 0),
+            'analyzing_total': total,
+            'analyzing_completed': completed,
+            'percent': percent
+        }
 
     def search_and_analyze(self, query: str, max_results: Optional[int] = None) -> Dict[str, Any]:
         try:
             logger.info(f"Starting search and analysis for query: {query}")
 
-            translated_query = self.summarizer.translate_keyword(query)
+            translated_query = self._get_translated_query(query)
             logger.info(f"Translated query: {translated_query}")
 
             # 多来源聚合：Semantic Scholar（期刊/顶会/综述）+ arXiv（预印本）
@@ -153,44 +374,111 @@ class PaperManager:
         return deduped
 
     def _dedup_papers(self, papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """按归一化标题去重，优先保留有真实引用量/venue 的来源"""
+        """多维度去重：归一化标题 + DOI + arXiv ID + 模糊标题匹配，优先保留有真实引用量/venue 的来源"""
         import re
+        from difflib import SequenceMatcher
 
         def _norm_title(title: str) -> str:
             t = re.sub(r'[^a-z0-9\s]', '', title.lower())
             t = re.sub(r'\s+', ' ', t).strip()
             return t
 
-        # 按 (归一化标题, doi, arxiv_id) 去重
-        seen: Dict[str, Dict[str, Any]] = {}
-        for p in papers:
-            key = _norm_title(p.get('title', ''))
-            if not key:
-                continue
+        def _get_doi(p: Dict[str, Any]) -> str:
+            # 从 doi 字段或 externalIds 中获取 DOI
+            doi = p.get('doi', '')
+            if not doi:
+                external_ids = p.get('externalIds') or {}
+                doi = external_ids.get('DOI', '') or external_ids.get('doi', '')
+            return (doi or '').strip().lower()
 
-            existing = seen.get(key)
-            if existing is None:
-                seen[key] = p
-                continue
+        def _get_arxiv_id(p: Dict[str, Any]) -> str:
+            # 从 arxiv_id 字段或 externalIds 中获取 arXiv ID
+            arxiv_id = p.get('arxiv_id', '') or p.get('arxivId', '')
+            if not arxiv_id:
+                external_ids = p.get('externalIds') or {}
+                arxiv_id = external_ids.get('ArXiv', '') or external_ids.get('arxiv', '')
+            return (arxiv_id or '').strip().lower()
 
-            # 已存在：合并字段，优先保留信息更丰富的记录
-            # 优先级：有真实引用量 > 有venue > arxiv
-            new_score = self._info_score(p)
+        def _title_similarity(t1: str, t2: str) -> float:
+            """计算两个归一化标题的相似度（0-1）"""
+            if not t1 or not t2:
+                return 0.0
+            return SequenceMatcher(None, t1, t2).ratio()
+
+        def _merge_into_existing(existing: Dict[str, Any], new: Dict[str, Any]) -> None:
+            """将 new 合并到 existing（就地修改 existing，保持对象引用不变）
+            优先级：有真实引用量 > 有venue > arxiv
+            """
+            new_score = self._info_score(new)
             old_score = self._info_score(existing)
             if new_score > old_score:
-                # 合并：保留更丰富的记录，但补充缺失字段
-                merged = {**existing, **p}
+                # new 信息更丰富：以 new 为主，但补充 existing 中 new 缺失的字段
+                merged = {**existing, **new}
                 for k, v in existing.items():
                     if not merged.get(k):
                         merged[k] = v
-                seen[key] = merged
+                existing.clear()
+                existing.update(merged)
             else:
-                # 保留 existing，但补充 p 中缺失的字段
-                for k, v in p.items():
+                # existing 更丰富：仅补充 existing 中缺失的字段
+                for k, v in new.items():
                     if not existing.get(k) and v:
                         existing[k] = v
 
-        return list(seen.values())
+        # 多维索引：均指向 result 中同一字典对象，便于快速查找重复
+        result: List[Dict[str, Any]] = []
+        norm_title_index: Dict[str, Dict[str, Any]] = {}  # 归一化标题 -> 论文
+        doi_index: Dict[str, Dict[str, Any]] = {}          # DOI -> 论文
+        arxiv_index: Dict[str, Dict[str, Any]] = {}        # arXiv ID -> 论文
+
+        for p in papers:
+            norm_title = _norm_title(p.get('title', ''))
+            doi = _get_doi(p)
+            arxiv_id = _get_arxiv_id(p)
+
+            existing: Optional[Dict[str, Any]] = None
+
+            # 1. 精确匹配：归一化标题
+            if norm_title and norm_title in norm_title_index:
+                existing = norm_title_index[norm_title]
+
+            # 2. DOI 匹配：相同 DOI 视为重复
+            if existing is None and doi and doi in doi_index:
+                existing = doi_index[doi]
+
+            # 3. arXiv ID 匹配：相同 arXiv ID 视为重复
+            if existing is None and arxiv_id and arxiv_id in arxiv_index:
+                existing = arxiv_index[arxiv_id]
+
+            # 4. 模糊标题匹配：SequenceMatcher 相似度 > 0.92 视为重复
+            if existing is None and norm_title:
+                for seen_paper in result:
+                    seen_norm = _norm_title(seen_paper.get('title', ''))
+                    if seen_norm and _title_similarity(norm_title, seen_norm) > 0.92:
+                        existing = seen_paper
+                        break
+
+            if existing is None:
+                # 新论文：加入结果并建立索引
+                result.append(p)
+                if norm_title:
+                    norm_title_index[norm_title] = p
+                if doi:
+                    doi_index[doi] = p
+                if arxiv_id:
+                    arxiv_index[arxiv_id] = p
+            else:
+                # 重复论文：合并字段（就地修改 existing，所有索引仍指向同一对象）
+                _merge_into_existing(existing, p)
+                # 补充索引：把 p 的 DOI/arxiv_id/标题 也指向 existing
+                if norm_title:
+                    norm_title_index[norm_title] = existing
+                if doi:
+                    doi_index[doi] = existing
+                if arxiv_id:
+                    arxiv_index[arxiv_id] = existing
+
+        return result
 
     @staticmethod
     def _info_score(p: Dict[str, Any]) -> int:
@@ -443,6 +731,137 @@ class PaperManager:
             logger.error(f"Error downloading paper {paper_id}: {e}", exc_info=True)
             return None
 
+    def answer_question(self, paper_id: str, question: str, paper_data: Optional[Dict[str, Any]] = None,
+                        history: Optional[List[Dict[str, str]]] = None) -> Optional[Dict[str, Any]]:
+        try:
+            if paper_data is None:
+                paper = self.fetcher.get_paper_by_id(paper_id)
+            else:
+                paper = paper_data
+            if not paper:
+                logger.warning(f"Paper not found for Q&A: {paper_id}")
+                return None
+            result = self.summarizer.answer_question(paper, question, history)
+            return result
+        except Exception as e:
+            logger.error(f"Error answering question for paper {paper_id}: {e}", exc_info=True)
+            return None
+
+    def compare_papers(self, paper_ids: List[str], papers_data: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+        try:
+            papers = []
+            if papers_data:
+                papers = papers_data
+            else:
+                for pid in paper_ids:
+                    p = self.fetcher.get_paper_by_id(pid)
+                    if p:
+                        papers.append(p)
+
+            if len(papers) < 2:
+                return None
+
+            if len(papers) > 2:
+                papers = papers[:2]
+
+            if self.summarizer.provider == 'deepseek' and self.summarizer.api_key:
+                paper1_info = f"标题: {papers[0].get('title', '')}\n摘要: {papers[0].get('summary', '')[:500]}\n年份: {papers[0].get('published', '')[:4]}\n引用: {papers[0].get('citation_count', 0)}"
+                paper2_info = f"标题: {papers[1].get('title', '')}\n摘要: {papers[1].get('summary', '')[:500]}\n年份: {papers[1].get('published', '')[:4]}\n引用: {papers[1].get('citation_count', 0)}"
+
+                prompt = f"""请对比以下两篇论文，从学术研究角度进行深度分析。
+
+论文1：
+{paper1_info}
+
+论文2：
+{paper2_info}
+
+请返回JSON格式：
+{{
+    "similarities": ["相似点1", "相似点2", "相似点3"],
+    "differences": [
+        {{"aspect": "研究目标", "paper1": "论文1的特点", "paper2": "论文2的特点"}},
+        {{"aspect": "核心方法", "paper1": "论文1的方法", "paper2": "论文2的方法"}},
+        {{"aspect": "实验结果", "paper1": "论文1的结果", "paper2": "论文2的结果"}},
+        {{"aspect": "创新性", "paper1": "论文1的创新", "paper2": "论文2的创新"}}
+    ],
+    "verdict": "综合评价（哪篇论文更具影响力/创新性，适用场景分别是什么）",
+    "use_cases": {{
+        "paper1_better_for": ["场景1", "场景2"],
+        "paper2_better_for": ["场景1", "场景2"]
+    }}
+}}
+
+要求：
+1. 分析要专业、客观，基于论文内容
+2. 对比维度要全面：目标、方法、结果、创新、应用场景
+3. 用中文回答
+4. 每篇论文的描述控制在50字以内，简洁明了
+"""
+
+                result = self.summarizer._call_deepseek(prompt, temperature=0.4, max_tokens=1000)
+                if result:
+                    return {
+                        'papers': [
+                            {
+                                'id': papers[0].get('id', ''),
+                                'title': papers[0].get('title', ''),
+                                'authors': papers[0].get('authors', []),
+                                'published': papers[0].get('published', ''),
+                                'citations': papers[0].get('citation_count', papers[0].get('estimated_citations', 0)),
+                                'impact_factor': papers[0].get('impact_factor', 0),
+                                'novelty': papers[0].get('novelty', 0),
+                                'venue': papers[0].get('venue', ''),
+                                'paper_type': papers[0].get('paper_type', 'preprint')
+                            },
+                            {
+                                'id': papers[1].get('id', ''),
+                                'title': papers[1].get('title', ''),
+                                'authors': papers[1].get('authors', []),
+                                'published': papers[1].get('published', ''),
+                                'citations': papers[1].get('citation_count', papers[1].get('estimated_citations', 0)),
+                                'impact_factor': papers[1].get('impact_factor', 0),
+                                'novelty': papers[1].get('novelty', 0),
+                                'venue': papers[1].get('venue', ''),
+                                'paper_type': papers[1].get('paper_type', 'preprint')
+                            }
+                        ],
+                        'ai_analysis': result
+                    }
+
+            return {
+                'papers': [
+                    {
+                        'id': p.get('id', ''),
+                        'title': p.get('title', ''),
+                        'authors': p.get('authors', []),
+                        'published': p.get('published', ''),
+                        'citations': p.get('citation_count', p.get('estimated_citations', 0)),
+                        'impact_factor': p.get('impact_factor', 0),
+                        'novelty': p.get('novelty', 0),
+                        'venue': p.get('venue', ''),
+                        'paper_type': p.get('paper_type', 'preprint')
+                    } for p in papers
+                ],
+                'ai_analysis': {
+                    'similarities': ['两篇论文均为该领域的重要研究工作', '都在方法层面有一定创新'],
+                    'differences': [
+                        {'aspect': '研究目标', 'paper1': papers[0].get('title', '')[:30] + '...', 'paper2': papers[1].get('title', '')[:30] + '...'},
+                        {'aspect': '核心方法', 'paper1': '需查阅原文', 'paper2': '需查阅原文'},
+                        {'aspect': '实验结果', 'paper1': '需查阅原文', 'paper2': '需查阅原文'},
+                        {'aspect': '创新性', 'paper1': '需查阅原文', 'paper2': '需查阅原文'}
+                    ],
+                    'verdict': '请连接 AI 服务以获取详细对比分析',
+                    'use_cases': {
+                        'paper1_better_for': ['需AI分析'],
+                        'paper2_better_for': ['需AI分析']
+                    }
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error comparing papers: {e}", exc_info=True)
+            return None
+
     def _save_search(self, query: str, result: Dict[str, Any]) -> None:
         try:
             safe_query = query.replace('/', '_').replace('\\', '_')
@@ -608,101 +1027,136 @@ class PaperManager:
         }
 
     def _extract_keywords(self, paper: Dict[str, Any]) -> List[str]:
-        """从论文中提取技术关键词"""
+        """从论文标题和摘要中提取技术关键词。
+        策略：提取标题/摘要中的专业术语（多词短语优先），结合 AI summary 的 methods。
+        """
+        import re
+        from collections import Counter
+
+        title = paper.get('title', '')
+        summary = paper.get('summary', '')
+        text = f"{title}. {summary}".lower()
+
         keywords = set()
 
-        title = paper.get('title', '').lower()
-        summary = paper.get('summary', '').lower()
-
-        stopwords = {
-            'result', 'results', 'work', 'works', 'paper', 'papers', 'method', 'methods',
-            'approach', 'approaches', 'algorithm', 'algorithms', 'model', 'models',
-            'network', 'networks', 'framework', 'frameworks', 'technique', 'techniques',
-            'system', 'systems', 'problem', 'problems', 'task', 'tasks', 'application',
-            'applications', 'study', 'studies', 'research', 'investigation', 'analysis',
-            'evaluation', 'experiments', 'experimental', 'performance', 'comparison',
-            'baseline', 'baselines', 'dataset', 'datasets', 'data', 'datum', 'training',
-            'testing', 'validation', 'evaluation', 'metric', 'metrics', 'accuracy',
-            'precision', 'recall', 'f1', 'score', 'scores', 'state-of-the-art', 'sota',
-            'novel', 'new', 'proposed', 'introduce', 'present', 'develop', 'design',
-            'implement', 'evaluate', 'show', 'demonstrate', 'achieve', 'improve',
-            'outperform', 'better', 'best', 'first', 'large', 'small', 'recent', 'previous',
-            'current', 'existing', 'traditional', 'modern', 'deep', 'shallow', 'neural',
-            'learning', 'machine', 'artificial', 'intelligence', 'computational',
-            'based', 'using', 'via', 'with', 'for', 'on', 'in', 'of', 'and', 'or', 'we',
-            'our', 'this', 'that', 'these', 'those', 'they', 'their', 'it', 'its', 'an', 'a', 'the'
-        }
-
-        tech_keywords = [
-            'transformer', 'attention mechanism', 'multi-head attention', 'self-attention',
-            'diffusion model', 'denoising diffusion', 'stable diffusion', 'controlnet',
-            'graph neural network', 'gnn', 'graph convolutional', 'gcn', 'gat', 'graph attention',
-            'reinforcement learning', 'rl', 'deep reinforcement', 'policy gradient', 'actor-critic',
-            'generative adversarial', 'gan', 'stylegan', 'biggan', 'cyclegan',
-            'convolutional neural', 'cnn', 'resnet', 'vgg', 'inception', 'densenet',
-            'recurrent neural', 'rnn', 'lstm', 'gru', 'bidirectional',
-            'bert', 'roberta', 'electra', 'albert', 'deberta',
-            'gpt', 'gpt-2', 'gpt-3', 'gpt-4', 'gpt-5',
-            'clip', 'contrastive language image', 'flamingo', 'blip', 'blip-2',
-            'imagen', 'dall-e', 'dall-e 2', 'dall-e 3', 'stable diffusion',
-            'large language model', 'llm', 'foundation model', 'multimodal model',
-            'vision language model', 'vlm', 'visual language', 'vision-language',
+        # 1. 常见技术术语表匹配（使用词边界，避免子串误匹配）
+        tech_terms = [
+            'transformer', 'attention mechanism', 'self-attention', 'multi-head attention',
+            'diffusion model', 'denoising diffusion', 'stable diffusion', 'score-based model',
+            'controlnet', 'latent diffusion',
+            'graph neural network', 'graph convolutional network', 'graph attention',
+            'reinforcement learning', 'policy gradient', 'actor-critic', 'q-learning',
+            'generative adversarial network', 'stylegan', 'cyclegan',
+            'convolutional neural network', 'resnet', 'vgg', 'inception',
+            'recurrent neural network', 'lstm', 'gru',
+            'bert', 'roberta', 'electra', 'albert',
+            'large language model', 'foundation model',
+            'vision-language model', 'multimodal model', 'vision transformer',
+            'contrastive learning', 'contrastive language-image',
             'pre-training', 'pretraining', 'fine-tuning', 'finetuning', 'prompt tuning',
-            'instruction tuning', 'alignment', 'rlhf', 'direct preference',
-            'few-shot', 'few shot', 'zero-shot', 'zero shot', 'one-shot',
-            'self-supervised learning', 'contrastive learning', 'masked autoencoder',
-            'meta-learning', 'maml', 'few-shot learning', 'learning to learn',
+            'instruction tuning', 'rlhf', 'alignment',
+            'few-shot', 'zero-shot', 'one-shot', 'in-context learning',
+            'self-supervised learning', 'masked autoencoder',
+            'meta-learning', 'maml',
             'adversarial training', 'domain adaptation', 'transfer learning',
-            'federated learning', 'privacy preserving', 'differential privacy',
-            'quantization', 'model compression', 'knowledge distillation', 'pruning',
-            'mixture of experts', 'moe', 'sparse model', 'adapter', 'lora', 'low-rank',
-            'retrieval augmented', 'rag', 'retrieval-based', 'memory augmented',
-            'agent', 'ai agent', 'planning', 'reasoning', 'chain of thought', 'cot',
-            'tool use', 'tool learning', 'function calling',
-            'embedding', 'text embedding', 'image embedding', 'multimodal embedding',
-            'tokenization', 'byte pair', 'sentencepiece', 'wordpiece',
-            'decoding', 'beam search', 'top-k', 'top-p', 'nucleus sampling',
-            'scaling law', 'efficiency', 'inference speed', 'training efficiency',
-            'encoder-decoder', 'decoder-only', 'encoder-only',
-            'visual grounding', 'object detection', 'image segmentation', 'instance segmentation',
+            'federated learning', 'differential privacy',
+            'quantization', 'knowledge distillation', 'model compression', 'pruning',
+            'mixture of experts', 'low-rank adaptation',
+            'retrieval augmented generation',
+            'chain of thought', 'tool learning',
+            'image generation', 'text-to-image', 'image captioning', 'image segmentation',
+            'object detection', 'semantic segmentation', 'instance segmentation',
             'video understanding', 'action recognition', 'video generation',
-            'navigation', 'vln', 'visual navigation', 'embodied ai', 'embodied learning',
-            'question answering', 'visual qa', 'vqa', 'text qa',
-            'summarization', 'text summarization', 'video summarization',
-            'machine translation', 'neural machine', 'zero-shot translation',
-            'image captioning', 'video captioning', 'image generation', 'text-to-image',
-            'parsing', 'constituency parsing', 'dependency parsing', 'semantic parsing',
-            'representation learning', 'feature learning', 'metric learning',
-            'optimization', 'adam', 'sgd', 'learning rate', 'batch normalization',
-            'regularization', 'dropout', 'weight decay', 'label smoothing',
-            'benchmark', 'leaderboard', 'evaluation protocol', 'standard dataset',
-            'openai', 'google', 'meta', 'microsoft', 'deepmind', 'anthropic',
-            'stanford', 'mit', 'cmu', 'berkeley', 'eth zurich', 'max planck',
-            'arxiv', 'iclr', 'icml', 'neurips', 'acl', 'emnlp', 'cvpr', 'eccv', 'iccv',
-            'aaai', 'ijcai', 'sigir', 'kdd', 'wsdm', 'www'
+            'visual question answering',
+            'neural machine translation', 'text summarization',
+            'representation learning', 'metric learning',
+            'normalizing flow', 'variational autoencoder', 'autoregressive model',
+            'energy-based model', 'flow matching', 'rectified flow',
+            'scaling law', 'emergent ability',
+            'knowledge graph', 'named entity recognition',
+            'text-to-speech', 'speech recognition', 'audio generation',
+            'neural radiance field', 'nerf',
+            'world model', 'embodied ai',
         ]
 
-        for kw in tech_keywords:
-            if kw in title or kw in summary:
-                keywords.add(kw)
+        for term in tech_terms:
+            # 多词术语用 in 匹配，单词术语用词边界匹配避免子串误匹配
+            if ' ' in term or '-' in term:
+                if term in text:
+                    keywords.add(term)
+            else:
+                if re.search(r'\b' + re.escape(term) + r'\b', text):
+                    keywords.add(term)
 
+        # 2. 从标题中提取名词短语（大写词首字母缩写和专有名词）
+        # 提取标题中的缩写词（如 BERT, GPT, CLIP 等 2-5个大写字母的词）
+        acronyms = re.findall(r'\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+\b', title)
+        for acr in acronyms:
+            if 2 <= len(acr) <= 15:
+                keywords.add(acr.lower())
+
+        # 3. 从 AI summary 的 methods 字段提取（仅取简洁的方法名）
         ai_sum = paper.get('ai_summary', {})
-        methods = ai_sum.get('methods', [])
-        for method in methods:
-            m = method.lower().strip()
-            if len(m) > 3 and len(m) < 50:
-                parts = m.replace('-', ' ').replace('_', ' ').split()
-                filtered = [p for p in parts if len(p) >= 3 and p not in stopwords]
-                if len(filtered) >= 2:
-                    keywords.add(' '.join(filtered[:3]))
-                elif len(filtered) == 1 and filtered[0] not in stopwords:
-                    keywords.add(filtered[0])
+        if ai_sum and isinstance(ai_sum, dict):
+            methods = ai_sum.get('methods', [])
+            for method in methods:
+                m = method.lower().strip()
+                # 跳过中文内容、过长的句子（methods 应该是简洁的方法名，不是完整句子）
+                if 3 < len(m) < 40 and not any('\u4e00' <= c <= '\u9fff' for c in m):
+                    # 跳过包含句号的（说明是完整句子而非方法名）
+                    if '.' not in m and len(m.split()) <= 5:
+                        if m not in ('deep learning method', 'deep learning approach'):
+                            keywords.add(m)
 
-        for cat in paper.get('categories', []):
-            if any(prefix in cat for prefix in ['cs.', 'stat.', 'q-bio.', 'q-fin.']):
-                keywords.add(cat)
+        # 4. 从摘要中提取高频专业词组（2-3词短语）
+        # 提取 "adjective+noun" 或 "noun+noun" 模式的短语
+        stop = {'result', 'results', 'work', 'paper', 'method', 'approach',
+                'algorithm', 'model', 'network', 'framework', 'technique',
+                'system', 'problem', 'task', 'application', 'study', 'research',
+                'analysis', 'evaluation', 'experiment', 'performance', 'comparison',
+                'baseline', 'dataset', 'data', 'training', 'testing', 'validation',
+                'metric', 'accuracy', 'precision', 'recall', 'score',
+                'novel', 'new', 'proposed', 'introduce', 'present', 'develop',
+                'design', 'implement', 'evaluate', 'show', 'demonstrate',
+                'achieve', 'improve', 'outperform', 'better', 'best', 'first',
+                'large', 'small', 'recent', 'previous', 'current', 'existing',
+                'traditional', 'modern', 'based', 'using', 'via', 'with', 'for',
+                'on', 'in', 'of', 'and', 'or', 'we', 'our', 'this', 'that',
+                'these', 'those', 'they', 'their', 'it', 'its', 'an', 'a', 'the',
+                'paper', 'propose', 'proposed', 'method', 'methods', 'approach',
+                'approaches', 'learning', 'neural', 'deep', 'machine',
+                # 常见无意义动词/介词/代词
+                'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has',
+                'had', 'do', 'does', 'did', 'will', 'would', 'can', 'could',
+                'should', 'may', 'might', 'must', 'shall', 'not', 'no', 'nor',
+                'but', 'however', 'while', 'when', 'where', 'which', 'what',
+                'who', 'whom', 'how', 'why', 'if', 'then', 'else', 'also',
+                'than', 'too', 'very', 'more', 'most', 'less', 'least',
+                'some', 'any', 'all', 'each', 'every', 'both', 'few', 'many',
+                'such', 'same', 'other', 'another', 'only', 'just', 'even',
+                'there', 'here', 'now', 'thus', 'hence', 'therefore',
+                'between', 'through', 'during', 'before', 'after', 'above',
+                'below', 'from', 'into', 'onto', 'upon', 'over', 'under',
+                'two', 'three', 'one', 'four', 'five', 'high', 'low',
+                'well', 'still', 'often', 'always', 'never', 'ever'}
 
-        keywords = {k for k in keywords if k not in stopwords}
+        # 简单的 n-gram 提取（仅从英文摘要中提取）
+        words = re.findall(r'[a-z][a-z0-9-]+', summary.lower())
+        bigrams = []
+        for i in range(len(words) - 1):
+            w1, w2 = words[i], words[i + 1]
+            if w1 not in stop and w2 not in stop and len(w1) > 2 and len(w2) > 2:
+                bigrams.append(f"{w1} {w2}")
+
+        # 取出现次数 >= 2 的高频 bigram
+        bg_counts = Counter(bigrams)
+        for bg, count in bg_counts.most_common(5):
+            if count >= 2:
+                keywords.add(bg)
+
+        # 5. 过滤和限制
+        # 去掉纯数字、过短/过长的关键词
+        keywords = {k for k in keywords if 3 <= len(k) <= 50 and not k.isdigit()}
 
         return list(keywords)[:8]
 

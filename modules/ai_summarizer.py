@@ -1,5 +1,6 @@
 import re
 import json
+import time
 import logging
 from typing import Dict, List, Optional, Any
 
@@ -22,37 +23,97 @@ class AISummarizer:
         self._free_translator: FreeTranslator = FreeTranslator()
 
     def _call_deepseek(self, prompt: str, temperature: float = None, max_tokens: int = None) -> Optional[Dict[str, Any]]:
-        try:
-            headers = {
-                'Authorization': f'Bearer {self.api_key}',
-                'Content-Type': 'application/json'
-            }
-            data = {
-                'model': self.model,
-                'messages': [{'role': 'user', 'content': prompt}],
-                'temperature': temperature or self.temperature,
-                'max_tokens': max_tokens or self.max_tokens,
-                'response_format': {'type': 'json_object'}
-            }
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=data,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            result = response.json()
-            content = result['choices'][0]['message']['content']
-            return json.loads(content)
-        except requests.exceptions.RequestException as e:
-            logger.error(f"DeepSeek API request error: {e}")
-            return None
-        except (KeyError, json.JSONDecodeError) as e:
-            logger.error(f"DeepSeek API response parsing error: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"DeepSeek API unknown error: {e}", exc_info=True)
-            return None
+        headers = {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
+        data = {
+            'model': self.model,
+            'messages': [{'role': 'user', 'content': prompt}],
+            'temperature': temperature or self.temperature,
+            'max_tokens': max_tokens or self.max_tokens,
+            'response_format': {'type': 'json_object'}
+        }
+
+        # 重试机制：最多 3 次，间隔递增（1s, 2s, 4s）
+        max_retries = 3
+        retry_intervals = [1, 2, 4]
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=data,
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                return json.loads(content)
+            except requests.exceptions.HTTPError as e:
+                # HTTP 错误：根据状态码决定是否重试
+                status_code = e.response.status_code if e.response is not None else None
+                if status_code == 429 or (status_code is not None and 500 <= status_code < 600):
+                    # 429 (Rate Limit) 或 5xx 服务端错误：可重试
+                    if attempt < max_retries - 1:
+                        wait = retry_intervals[attempt]
+                        logger.warning(
+                            f"DeepSeek API 返回 {status_code}（第 {attempt + 1}/{max_retries} 次尝试），"
+                            f"{wait}s 后重试..."
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.error(
+                        f"DeepSeek API 重试 {max_retries} 次后仍失败（HTTP {status_code}）: {e}",
+                        exc_info=True
+                    )
+                    return None
+                # 4xx 客户端错误（非429）：不重试，直接返回 None
+                logger.error(f"DeepSeek API 客户端错误（HTTP {status_code}），不重试: {e}")
+                return None
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                # 超时/连接错误：可重试
+                if attempt < max_retries - 1:
+                    wait = retry_intervals[attempt]
+                    logger.warning(
+                        f"DeepSeek API 网络错误（第 {attempt + 1}/{max_retries} 次尝试），"
+                        f"{wait}s 后重试: {e}"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"DeepSeek API 重试 {max_retries} 次后仍网络错误: {e}", exc_info=True)
+                return None
+            except requests.exceptions.RequestException as e:
+                # 其他 requests 异常：可重试
+                if attempt < max_retries - 1:
+                    wait = retry_intervals[attempt]
+                    logger.warning(
+                        f"DeepSeek API 请求异常（第 {attempt + 1}/{max_retries} 次尝试），"
+                        f"{wait}s 后重试: {e}"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"DeepSeek API 重试 {max_retries} 次后仍失败: {e}", exc_info=True)
+                return None
+            except (KeyError, json.JSONDecodeError) as e:
+                # 响应解析错误：不重试（重试通常得到相同结果）
+                logger.error(f"DeepSeek API 响应解析错误，不重试: {e}", exc_info=True)
+                return None
+            except Exception as e:
+                # 未知异常：可重试
+                if attempt < max_retries - 1:
+                    wait = retry_intervals[attempt]
+                    logger.warning(
+                        f"DeepSeek API 未知错误（第 {attempt + 1}/{max_retries} 次尝试），"
+                        f"{wait}s 后重试: {e}"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"DeepSeek API 重试 {max_retries} 次后仍失败（未知错误）: {e}", exc_info=True)
+                return None
+
+        return None
 
     def translate_keyword(self, keyword: str) -> str:
         if self._is_english(keyword):
@@ -397,6 +458,88 @@ class AISummarizer:
         if self.provider == 'deepseek' and self.api_key:
             return self._deepseek_design_doc(paper)
         return self._mock_design_doc(paper)
+
+    def answer_question(self, paper: Dict[str, Any], question: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        if self.provider == 'deepseek' and self.api_key:
+            return self._deepseek_answer(paper, question, history)
+        return self._mock_answer(paper, question)
+
+    def _deepseek_answer(self, paper: Dict[str, Any], question: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        title = paper.get('title', '')
+        abstract = paper.get('summary', '')
+        methods = ', '.join(paper.get('ai_summary', {}).get('methods', []) if paper.get('ai_summary') else [])
+        contributions = '\n'.join(paper.get('ai_summary', {}).get('contributions', []) if paper.get('ai_summary') else [])
+
+        history_text = ''
+        if history and len(history) > 0:
+            history_parts = []
+            for h in history[-6:]:
+                history_parts.append(f"用户: {h.get('question', '')}\nAI: {h.get('answer', '')}")
+            history_text = '\n'.join(history_parts) + '\n\n'
+
+        prompt = f"""你是一个专业的学术研究助手，请基于以下论文内容回答用户的问题。
+
+论文标题：{title}
+论文摘要：{abstract}
+核心方法：{methods}
+主要贡献：{contributions}
+
+历史对话：
+{history_text}
+当前问题：{question}
+
+要求：
+1. 回答必须基于论文内容，不要编造论文中没有的信息
+2. 如果论文中没有相关信息，请明确说明"本文未直接讨论该问题"
+3. 回答要准确、简洁、专业，用中文
+4. 适当引用论文中的关键术语和方法
+5. 如果问题需要扩展回答，可以在基于论文的基础上补充相关背景知识
+
+请返回JSON格式：
+{{
+    "answer": "回答内容（中文，200-500字）",
+    "confidence": "high|medium|low",
+    "references": ["引用的论文关键点1", "引用的论文关键点2"]
+}}"""
+
+        result = self._call_deepseek(prompt, temperature=0.5, max_tokens=800)
+        if result:
+            return {
+                'answer': result.get('answer', '抱歉，无法回答该问题。'),
+                'confidence': result.get('confidence', 'medium'),
+                'references': result.get('references', [])
+            }
+        return {
+            'answer': 'AI服务暂时不可用，请稍后重试。',
+            'confidence': 'low',
+            'references': []
+        }
+
+    def _mock_answer(self, paper: Dict[str, Any], question: str) -> Dict[str, Any]:
+        title = paper.get('title', '')
+        abstract = paper.get('summary', '')
+        sentences = re.split(r'(?<=[.!?])\s+', abstract)
+
+        keywords = question.lower().split()
+        relevant_sentences = []
+        for s in sentences:
+            for kw in keywords:
+                if kw and kw in s.lower():
+                    relevant_sentences.append(s)
+                    break
+
+        if len(relevant_sentences) == 0:
+            relevant_sentences = sentences[:2] if len(sentences) >= 2 else sentences
+
+        answer = f"基于论文《{title}》的内容：\n\n" + ' '.join(relevant_sentences)
+        if len(relevant_sentences) < 2:
+            answer += "\n\n请注意：本文摘要中关于该问题的信息有限，建议查阅原文获取更多细节。"
+
+        return {
+            'answer': answer,
+            'confidence': 'low',
+            'references': [title]
+        }
 
     def _deepseek_design_doc(self, paper: Dict[str, Any]) -> Dict[str, Any]:
         title = paper.get('title', '')

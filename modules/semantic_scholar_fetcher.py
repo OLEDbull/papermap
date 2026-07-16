@@ -35,31 +35,74 @@ class SemanticScholarFetcher:
             'externalIds,openAccessPdf,fieldsOfStudy,tldr'
         )
 
-        all_papers: List[Dict[str, Any]] = []
-        seen_ids = set()
-
         # 两轮搜索：① 高引用经典论文（期刊/顶会） ② 最新论文
         searches = [
             {'sort': 'citationCount:desc', 'limit': min(60, max_results), 'label': '高引用经典'},
             {'sort': 'publicationDate:desc', 'limit': min(60, max_results), 'label': '最新发表'},
         ]
 
-        for s in searches:
-            if len(all_papers) >= max_results:
-                break
-            remaining = max_results - len(all_papers)
-            limit = min(s['limit'], remaining)
-            papers = self._fetch_batch(query, fields, limit=limit, sort=s['sort'])
-            for p in papers:
-                pid = p.get('id', '')
-                if pid and pid not in seen_ids:
-                    seen_ids.add(pid)
-                    all_papers.append(p)
-            time.sleep(1.5)  # 无key时速率限制：100请求/5分钟
+        # 重试机制：最多 3 次，间隔递增（2s, 4s, 8s）
+        max_retries = 3
+        retry_intervals = [2, 4, 8]
 
-        all_papers.sort(key=lambda x: x.get('published', ''), reverse=False)
-        logger.info(f"Semantic Scholar fetched {len(all_papers)} papers for '{query}'")
-        return all_papers
+        for attempt in range(max_retries):
+            all_papers: List[Dict[str, Any]] = []
+            seen_ids = set()
+            try:
+                for s in searches:
+                    if len(all_papers) >= max_results:
+                        break
+                    remaining = max_results - len(all_papers)
+                    limit = min(s['limit'], remaining)
+                    papers = self._fetch_batch(query, fields, limit=limit, sort=s['sort'])
+                    for p in papers:
+                        pid = p.get('id', '')
+                        if pid and pid not in seen_ids:
+                            seen_ids.add(pid)
+                            all_papers.append(p)
+                    time.sleep(1.5)  # 无key时速率限制：100请求/5分钟
+
+                all_papers.sort(key=lambda x: x.get('published', ''), reverse=False)
+                logger.info(f"Semantic Scholar fetched {len(all_papers)} papers for '{query}'")
+                return all_papers
+            except urllib.error.HTTPError as e:
+                # HTTP 错误：可重试
+                if attempt < max_retries - 1:
+                    wait = retry_intervals[attempt]
+                    logger.warning(
+                        f"S2 搜索失败（HTTP {e.code}，第 {attempt + 1}/{max_retries} 次），"
+                        f"{wait}s 后重试: {e}"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"S2 搜索重试 {max_retries} 次后仍失败（HTTP {e.code}）: {e}", exc_info=True)
+                return []
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                # 超时/网络/URL 错误：可重试
+                if attempt < max_retries - 1:
+                    wait = retry_intervals[attempt]
+                    logger.warning(
+                        f"S2 搜索失败（网络错误，第 {attempt + 1}/{max_retries} 次），"
+                        f"{wait}s 后重试: {e}"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"S2 搜索重试 {max_retries} 次后仍失败（网络错误）: {e}", exc_info=True)
+                return []
+            except Exception as e:
+                # 其他未知异常：可重试
+                if attempt < max_retries - 1:
+                    wait = retry_intervals[attempt]
+                    logger.warning(
+                        f"S2 搜索失败（未知错误，第 {attempt + 1}/{max_retries} 次），"
+                        f"{wait}s 后重试: {e}"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"S2 搜索重试 {max_retries} 次后仍失败（未知错误）: {e}", exc_info=True)
+                return []
+
+        return []
 
     def _fetch_batch(self, query: str, fields: str, limit: int = 50,
                      sort: str = 'citationCount:desc',

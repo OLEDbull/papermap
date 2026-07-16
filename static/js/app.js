@@ -199,7 +199,10 @@ function showFavorites() {
                         <div class="paper-date">${date}</div>
                         <div class="paper-brief">${paper.summary || ''}</div>
                     </div>
-                    <button class="paper-fav-btn favorited" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="取消收藏">⭐</button>
+                    <div class="paper-actions">
+                        <button class="paper-action-btn favorited" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="取消收藏">⭐</button>
+                        <button class="paper-action-btn paper-compare-btn ${isInCompare(paper.id) ? 'in-compare' : ''}" data-compare-id="${paper.id}" onclick="event.stopPropagation(); toggleCompare('${paper.id}')" title="${isInCompare(paper.id) ? '取消对比' : '加入对比'}">${isInCompare(paper.id) ? '📊' : '📈'}</button>
+                    </div>
                 </div>
             `;
         });
@@ -208,6 +211,7 @@ function showFavorites() {
 
     html += '</div>';
     content.innerHTML = html;
+    updateCompareButtons();
 }
 
 // ============ 搜索 ============
@@ -227,11 +231,9 @@ function searchPapers() {
         '检索期刊与顶会论文',
         '检索预印本论文',
         '多源去重与排序',
-        'AI生成影响力评分',
-        '构建技术演进图谱'
+        '快速生成评分'
     ]);
 
-    // 使用no-cache搜索以获取新结果
     const url = `/api/search?q=${encodeURIComponent(query)}`;
     fetch(url)
         .then(response => response.json())
@@ -242,19 +244,147 @@ function searchPapers() {
                 return;
             }
             currentData = data;
-            // 缓存论文数据
             if (data.papers) {
                 data.papers.forEach(p => { currentPaperData[p.id] = p; });
             }
-            // 保存搜索历史
             saveSearchHistory(query);
             displayTimeline(data);
+            
+            const phase = data.analysis_phase || 'deep';
+            if (phase === 'fast' || phase === 'analyzing') {
+                startAnalysisPolling(query);
+                showAnalysisBanner(true);
+                if (phase === 'analyzing') {
+                    fetch(`/api/search/status?q=${encodeURIComponent(query)}`)
+                        .then(r => r.json())
+                        .then(status => updateAnalysisBanner(status))
+                        .catch(() => {});
+                }
+            } else {
+                showAnalysisBanner(false);
+            }
         })
         .catch(error => {
             showLoading(false);
             console.error('Search error:', error);
             alert('搜索失败，请检查网络后重试');
         });
+}
+
+let analysisPollTimer = null;
+let lastRefreshPercent = 0;
+
+function startAnalysisPolling(query) {
+    if (analysisPollTimer) {
+        clearInterval(analysisPollTimer);
+    }
+    
+    lastRefreshPercent = 0;
+    let checkCount = 0;
+    const maxChecks = 120;
+    
+    analysisPollTimer = setInterval(() => {
+        checkCount++;
+        if (checkCount > maxChecks) {
+            clearInterval(analysisPollTimer);
+            analysisPollTimer = null;
+            showAnalysisBanner(false);
+            return;
+        }
+        
+        fetch(`/api/search/status?q=${encodeURIComponent(query)}`)
+            .then(r => r.json())
+            .then(status => {
+                updateAnalysisBanner(status);
+                
+                if (status.status === 'completed' || status.phase === 'deep') {
+                    clearInterval(analysisPollTimer);
+                    analysisPollTimer = null;
+                    refreshSearchResults(query);
+                    showAnalysisBanner(false);
+                    showToast('🤖 AI深度分析已完成，结果已更新');
+                    return;
+                }
+                
+                const percent = status.percent || 0;
+                if (percent - lastRefreshPercent >= 20 && percent < 100) {
+                    lastRefreshPercent = percent;
+                    refreshSearchResults(query, true);
+                }
+            })
+            .catch(() => {});
+    }, 2000);
+}
+
+function stopAnalysisPolling() {
+    if (analysisPollTimer) {
+        clearInterval(analysisPollTimer);
+        analysisPollTimer = null;
+    }
+}
+
+function refreshSearchResults(query, silent = false) {
+    fetch(`/api/search/refresh?q=${encodeURIComponent(query)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) return;
+            currentData = data;
+            if (data.papers) {
+                data.papers.forEach(p => { currentPaperData[p.id] = p; });
+            }
+            displayTimeline(data);
+            if (!silent) {
+                showAnalysisBanner(false);
+                showToast('🤖 AI深度分析已完成，结果已更新');
+            }
+        })
+        .catch(() => {});
+}
+
+function showAnalysisBanner(show) {
+    let banner = document.getElementById('analysisBanner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'analysisBanner';
+        banner.className = 'analysis-banner';
+        banner.innerHTML = `
+            <div class="analysis-banner-content">
+                <div class="analysis-banner-top">
+                    <span class="analysis-spinner"></span>
+                    <span class="analysis-text">🤖 AI正在深度分析Top论文...</span>
+                    <span class="analysis-percent">0%</span>
+                </div>
+                <div class="analysis-progress-bar">
+                    <div class="analysis-progress-fill"></div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(banner);
+    }
+    banner.classList.toggle('show', show);
+}
+
+function updateAnalysisBanner(status) {
+    const banner = document.getElementById('analysisBanner');
+    if (!banner) return;
+    
+    const percent = status.percent || 0;
+    const completed = status.analyzing_completed || 0;
+    const total = status.analyzing_total || 0;
+    
+    const percentEl = banner.querySelector('.analysis-percent');
+    const fillEl = banner.querySelector('.analysis-progress-fill');
+    const textEl = banner.querySelector('.analysis-text');
+    
+    if (percentEl) {
+        percentEl.textContent = `${percent}%`;
+    }
+    if (fillEl) {
+        fillEl.style.width = `${percent}%`;
+    }
+    if (textEl && total > 0) {
+        textEl.textContent = `🤖 AI深度分析中 (${completed}/${total}篇)`;
+    }
 }
 
 function quickSearch(query) {
@@ -373,8 +503,33 @@ function displayTimeline(data) {
                 <button class="filter-btn" onclick="toggleFilter('favorite')" id="filterFav">
                     ⭐ 只看收藏
                 </button>
+                <select class="filter-select" onchange="updateFilter('yearFrom', this.value)" id="filterYearFrom" title="起始年份">
+                    <option value="">起年份</option>
+                    ${Array.from({length: 12}, (_, i) => 2015 + i).map(y => `<option value="${y}">${y}</option>`).join('')}
+                </select>
+                <span class="filter-sep">~</span>
+                <select class="filter-select" onchange="updateFilter('yearTo', this.value)" id="filterYearTo" title="结束年份">
+                    <option value="">止年份</option>
+                    ${Array.from({length: 12}, (_, i) => 2015 + i).map(y => `<option value="${y}">${y}</option>`).join('')}
+                </select>
+                <select class="filter-select" onchange="updateFilter('minCitations', this.value)" id="filterMinCitations" title="最小引用量">
+                    <option value="0">引用 ≥ 0</option>
+                    <option value="50">引用 ≥ 50</option>
+                    <option value="100">引用 ≥ 100</option>
+                    <option value="500">引用 ≥ 500</option>
+                    <option value="1000">引用 ≥ 1000</option>
+                    <option value="5000">引用 ≥ 5000</option>
+                </select>
+                <select class="filter-select" onchange="updateFilter('paperType', this.value)" id="filterPaperType" title="论文类型">
+                    <option value="">全部类型</option>
+                    <option value="journal">期刊</option>
+                    <option value="conference">会议</option>
+                    <option value="review">综述</option>
+                    <option value="preprint">预印本</option>
+                </select>
             </div>
             <div class="filter-right">
+                <button class="filter-btn" onclick="batchTranslateAll()" id="batchTranslateBtn">🌐 批量翻译</button>
                 <button class="filter-btn export-btn" onclick="exportPapers('bibtex')">
                     📑 BibTeX
                 </button>
@@ -503,14 +658,17 @@ function displayTimeline(data) {
                         <div class="paper-title">${typeBadge}${paper.title}</div>
                         <div class="paper-authors">${authors}</div>
                         <div class="paper-date">${date} ${venueText}</div>
-                        <div class="paper-brief">${paper.summary || ''}</div>
+                        <div class="paper-brief">${paper._summary_translated ? '<span class="translated-tag" title="摘要已翻译为中文">🌐 已译</span> ' : ''}${paper.summary || ''}</div>
                         <div class="paper-metrics">
                             <span class="metric-item metric-impact" title="影响力因子">📊 ${impact}</span>
                             <span class="metric-item metric-citations" title="引用量">📝 ${citations}${citationSource}</span>
                             <span class="metric-item metric-novelty" title="创新性评分">💡 ${novelty}</span>
                         </div>
                     </div>
-                    <button class="paper-fav-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                    <div class="paper-actions">
+                        <button class="paper-action-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                        <button class="paper-action-btn paper-compare-btn ${isInCompare(paper.id) ? 'in-compare' : ''}" data-compare-id="${paper.id}" onclick="event.stopPropagation(); toggleCompare('${paper.id}')" title="${isInCompare(paper.id) ? '取消对比' : '加入对比'}">${isInCompare(paper.id) ? '📊' : '📈'}</button>
+                    </div>
                 </div>
             `;
         });
@@ -546,14 +704,17 @@ function displayTimeline(data) {
                             <div class="paper-title">${typeBadge}${paper.title}</div>
                             <div class="paper-authors">${authors}</div>
                             <div class="paper-date">${date} ${venueText}</div>
-                            <div class="paper-brief">${paper.summary || ''}</div>
+                            <div class="paper-brief">${paper._summary_translated ? '<span class="translated-tag" title="摘要已翻译为中文">🌐 已译</span> ' : ''}${paper.summary || ''}</div>
                             <div class="paper-metrics">
                                 <span class="metric-item metric-impact" title="影响力因子">📊 ${impact}</span>
                                 <span class="metric-item metric-citations" title="引用量">📝 ${citations}${citationSource}</span>
                                 <span class="metric-item metric-novelty" title="创新性评分">💡 ${novelty}</span>
                             </div>
                         </div>
-                        <button class="paper-fav-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                        <div class="paper-actions">
+                            <button class="paper-action-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                            <button class="paper-action-btn paper-compare-btn ${isInCompare(paper.id) ? 'in-compare' : ''}" data-compare-id="${paper.id}" onclick="event.stopPropagation(); toggleCompare('${paper.id}')" title="${isInCompare(paper.id) ? '取消对比' : '加入对比'}">${isInCompare(paper.id) ? '📊' : '📈'}</button>
+                        </div>
                     </div>
                 `;
             });
@@ -570,6 +731,9 @@ function displayTimeline(data) {
 
     // 初始化滚动提示
     initScrollHint();
+    
+    // 更新对比按钮状态
+    updateCompareButtons();
 }
 
 function initScrollHint() {
@@ -612,7 +776,14 @@ function initScrollHint() {
 
 // ============ 筛选与排序 ============
 
-let currentFilter = { breakthrough: false, favorite: false };
+let currentFilter = {
+    breakthrough: false,
+    favorite: false,
+    yearFrom: '',     // 起始年份
+    yearTo: '',       // 结束年份
+    minCitations: 0,  // 最小引用量
+    paperType: ''     // 论文类型：journal/conference/review/preprint
+};
 let currentSort = 'date_desc';
 
 function toggleFilter(type) {
@@ -623,6 +794,16 @@ function toggleFilter(type) {
         btn.classList.toggle('active', currentFilter[type]);
     }
 
+    applyFilterSort();
+}
+
+// 更新下拉框筛选器（年份/引用量/论文类型）
+function updateFilter(key, value) {
+    if (key === 'minCitations') {
+        currentFilter[key] = parseInt(value, 10) || 0;
+    } else {
+        currentFilter[key] = value;
+    }
     applyFilterSort();
 }
 
@@ -649,6 +830,31 @@ function applyFilterSort() {
     if (currentFilter.favorite) {
         const favs = getFavorites();
         papers = papers.filter(p => favs[p.id]);
+    }
+    // 时间范围筛选：按 paper.published 的年份过滤
+    if (currentFilter.yearFrom) {
+        const yf = parseInt(currentFilter.yearFrom, 10);
+        papers = papers.filter(p => {
+            if (!p.published) return false;
+            return new Date(p.published).getFullYear() >= yf;
+        });
+    }
+    if (currentFilter.yearTo) {
+        const yt = parseInt(currentFilter.yearTo, 10);
+        papers = papers.filter(p => {
+            if (!p.published) return false;
+            return new Date(p.published).getFullYear() <= yt;
+        });
+    }
+    // 最小引用量筛选
+    if (currentFilter.minCitations > 0) {
+        const minC = currentFilter.minCitations;
+        papers = papers.filter(p => (p.estimated_citations || 0) >= minC);
+    }
+    // 论文类型筛选
+    if (currentFilter.paperType) {
+        const pt = currentFilter.paperType;
+        papers = papers.filter(p => (p.paper_type || 'preprint') === pt);
     }
 
     // 排序
@@ -694,11 +900,20 @@ function rebuildTimeline(papers, originalTimeline) {
         periodMap[p.label] = { ...p, _order: i, _papers: [] };
     });
 
+    // 用日期范围匹配论文到对应时段，而非靠 label 字符串拼接
     papers.forEach(paper => {
-        const year = new Date(paper.published).getFullYear();
-        const label = `${year}年`;
-        if (periodMap[label]) {
-            periodMap[label]._papers.push(paper);
+        if (!paper.published) return;
+        const paperDate = new Date(paper.published);
+        if (isNaN(paperDate)) return;
+
+        for (const key in periodMap) {
+            const p = periodMap[key];
+            const start = p.start ? new Date(p.start) : null;
+            const end = p.end ? new Date(p.end) : null;
+            if (start && end && paperDate >= start && paperDate <= end) {
+                p._papers.push(paper);
+                break;
+            }
         }
     });
 
@@ -732,7 +947,8 @@ function rebuildTimeline(papers, originalTimeline) {
                     novelty: p2.novelty || 50,
                     estimated_citations: p2.estimated_citations || 20,
                     impact_factor: p2.impact_factor || 3.0,
-                    is_breakthrough: p2.is_breakthrough || false
+                    is_breakthrough: p2.is_breakthrough || false,
+                    _summary_translated: !!p2._summary_translated
                 })),
                 more_papers: morePapers.map(p2 => ({
                     id: p2.id,
@@ -743,7 +959,8 @@ function rebuildTimeline(papers, originalTimeline) {
                     novelty: p2.novelty || 50,
                     estimated_citations: p2.estimated_citations || 20,
                     impact_factor: p2.impact_factor || 3.0,
-                    is_breakthrough: p2.is_breakthrough || false
+                    is_breakthrough: p2.is_breakthrough || false,
+                    _summary_translated: !!p2._summary_translated
                 })),
                 paper_ids: sorted.map(p2 => p2.id)
             };
@@ -1150,24 +1367,89 @@ function buildTimelineTrack(data) {
         }
 
         html += `<div class="period-papers"><div class="papers-list">`;
-        period.papers.forEach((paper, pIdx) => {
-            const isBT = breakthroughIds.has(paper.id);
+        const topPapers = period.top_papers || [];
+        const morePapers = period.more_papers || [];
+
+        topPapers.forEach((paper, pIdx) => {
+            const isBT = breakthroughIds.has(paper.id) || paper.is_breakthrough;
             const authors = paper.authors ? paper.authors.join(', ') : 'Unknown';
             const date = paper.published ? new Date(paper.published).toLocaleDateString('zh-CN') : '';
+            const impact = paper.impact_factor || 3.0;
+            const citations = paper.estimated_citations || 0;
+            const novelty = paper.novelty || 50;
+            const typeBadge = renderPaperTypeBadge(paper.paper_type);
+            const venueText = paper.venue ? `<span class="paper-venue" title="${paper.venue}">📍${paper.venue}</span>` : '';
+            const citationSource = paper.citation_source === 'semantic_scholar' ? '<span class="citation-verified" title="真实引用量">✓</span>' : '';
             html += `
-                <div class="paper-item ${isBT ? 'is-breakthrough' : ''}" onclick="showPaperDetail('${paper.id}')">
+                <div class="paper-item ${isBT ? 'is-breakthrough' : ''}" onclick="showPaperDetail('${paper.id}')" data-impact="${impact}" data-citations="${citations}" data-novelty="${novelty}" data-date="${paper.published}" data-title="${paper.title}">
                     <div class="paper-index">${isBT ? '⚡' : pIdx + 1}</div>
                     <div class="paper-info">
-                        <div class="paper-title">${paper.title}</div>
+                        <div class="paper-title">${typeBadge}${paper.title}</div>
                         <div class="paper-authors">${authors}</div>
-                        <div class="paper-date">${date}</div>
-                        <div class="paper-brief">${paper.summary || ''}</div>
+                        <div class="paper-date">${date} ${venueText}</div>
+                        <div class="paper-brief">${paper._summary_translated ? '<span class="translated-tag" title="摘要已翻译为中文">🌐 已译</span> ' : ''}${paper.summary || ''}</div>
+                        <div class="paper-metrics">
+                            <span class="metric-item metric-impact" title="影响力因子">📊 ${impact}</span>
+                            <span class="metric-item metric-citations" title="引用量">📝 ${citations}${citationSource}</span>
+                            <span class="metric-item metric-novelty" title="创新性评分">💡 ${novelty}</span>
+                        </div>
                     </div>
-                    <button class="paper-fav-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                    <div class="paper-actions">
+                        <button class="paper-action-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                        <button class="paper-action-btn paper-compare-btn ${isInCompare(paper.id) ? 'in-compare' : ''}" data-compare-id="${paper.id}" onclick="event.stopPropagation(); toggleCompare('${paper.id}')" title="${isInCompare(paper.id) ? '取消对比' : '加入对比'}">${isInCompare(paper.id) ? '📊' : '📈'}</button>
+                    </div>
                 </div>
             `;
         });
-        html += `</div></div>`;
+        html += `</div>`;
+
+        // 加载更多按钮
+        if (morePapers.length > 0) {
+            html += `
+                <div class="load-more-container">
+                    <button class="load-more-btn" onclick="event.stopPropagation(); toggleMorePapers(${idx})" id="more-btn-${idx}">
+                        <span class="load-more-text">📚 查看更多 ${morePapers.length} 篇论文</span>
+                        <svg class="load-more-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="more-papers-list" id="more-papers-${idx}" style="display:none;">
+            `;
+            morePapers.forEach((paper, pIdx) => {
+                const isBT = breakthroughIds.has(paper.id) || paper.is_breakthrough;
+                const authors = paper.authors ? paper.authors.join(', ') : 'Unknown';
+                const date = paper.published ? new Date(paper.published).toLocaleDateString('zh-CN') : '';
+                const impact = paper.impact_factor || 3.0;
+                const citations = paper.estimated_citations || 0;
+                const novelty = paper.novelty || 50;
+                const typeBadge = renderPaperTypeBadge(paper.paper_type);
+                const venueText = paper.venue ? `<span class="paper-venue" title="${paper.venue}">📍${paper.venue}</span>` : '';
+                const citationSource = paper.citation_source === 'semantic_scholar' ? '<span class="citation-verified" title="真实引用量">✓</span>' : '';
+                html += `
+                    <div class="paper-item paper-item-more ${isBT ? 'is-breakthrough' : ''}" onclick="showPaperDetail('${paper.id}')" data-impact="${impact}" data-citations="${citations}" data-novelty="${novelty}" data-date="${paper.published}" data-title="${paper.title}">
+                        <div class="paper-index">${isBT ? '⚡' : topPapers.length + pIdx + 1}</div>
+                        <div class="paper-info">
+                            <div class="paper-title">${typeBadge}${paper.title}</div>
+                            <div class="paper-authors">${authors}</div>
+                            <div class="paper-date">${date} ${venueText}</div>
+                            <div class="paper-brief">${paper._summary_translated ? '<span class="translated-tag" title="摘要已翻译为中文">🌐 已译</span> ' : ''}${paper.summary || ''}</div>
+                            <div class="paper-metrics">
+                                <span class="metric-item metric-impact" title="影响力因子">📊 ${impact}</span>
+                                <span class="metric-item metric-citations" title="引用量">📝 ${citations}${citationSource}</span>
+                                <span class="metric-item metric-novelty" title="创新性评分">💡 ${novelty}</span>
+                            </div>
+                        </div>
+                        <div class="paper-actions">
+                            <button class="paper-action-btn ${isFavorite(paper.id) ? 'favorited' : ''}" data-fav-id="${paper.id}" onclick="event.stopPropagation(); toggleFavorite('${paper.id}')" title="${isFavorite(paper.id) ? '取消收藏' : '收藏'}">${isFavorite(paper.id) ? '⭐' : '☆'}</button>
+                            <button class="paper-action-btn paper-compare-btn ${isInCompare(paper.id) ? 'in-compare' : ''}" data-compare-id="${paper.id}" onclick="event.stopPropagation(); toggleCompare('${paper.id}')" title="${isInCompare(paper.id) ? '取消对比' : '加入对比'}">${isInCompare(paper.id) ? '📊' : '📈'}</button>
+                        </div>
+                    </div>
+                `;
+            });
+            html += `</div>`;
+        }
+        html += `</div>`;
 
         html += `</div></div></div>`;
     });
@@ -1195,6 +1477,7 @@ function toggleMorePapers(idx) {
         btn.querySelector('.load-more-text').textContent = `📚 查看更多 ${moreList.children.length} 篇论文`;
         btn.querySelector('.load-more-icon').style.transform = 'rotate(0deg)';
     }
+    updateCompareButtons();
 }
 
 // 时间线节点交互
@@ -1244,6 +1527,9 @@ function showPaperDetail(paperId) {
         return;
     }
 
+    currentQaPaperId = paperId;
+    qaHistory = [];
+
     const modal = document.getElementById('paperModal');
     const body = document.getElementById('modalBody');
 
@@ -1273,31 +1559,44 @@ function showPaperDetail(paperId) {
             <div class="detail-abstract" id="paperSummary_${paperId}">${paper.summary || '暂无摘要'}</div>
         </div>
 
-        <div id="modalAiSection" class="detail-section">
-            <div class="detail-section-title">🤖 AI 智能分析</div>
+        <div class="detail-tabs">
+            <button class="detail-tab active" onclick="switchDetailTab('ai', '${paperId}')" id="detail-tab-ai">
+                🤖 AI 智能分析
+            </button>
+            <button class="detail-tab" onclick="switchDetailTab('design', '${paperId}')" id="detail-tab-design">
+                📋 复现设计文档
+            </button>
+            <button class="detail-tab" onclick="switchDetailTab('qa', '${paperId}')" id="detail-tab-qa">
+                💬 论文问答
+            </button>
+        </div>
+
+        <div id="detail-panel-ai" class="detail-tab-panel active">
             <div id="modalAiContent" style="text-align: center; padding: 30px;">
                 <div class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px; margin: 0 auto 12px;"></div>
                 <div style="font-size: 14px; color: var(--text-secondary);">DeepSeek 正在分析论文...</div>
             </div>
         </div>
 
-        <div id="modalDesignSection" class="detail-section hidden">
-            <div class="detail-section-title">📋 复现设计文档</div>
-            <div id="modalDesignContent" style="text-align: center; padding: 30px;">
-                <div class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px; margin: 0 auto 12px;"></div>
-                <div style="font-size: 14px; color: var(--text-secondary);">正在生成设计文档...</div>
+        <div id="detail-panel-design" class="detail-tab-panel">
+            <div id="modalDesignContent" style="text-align: center; padding: 30px; color: var(--text-tertiary);">
+                点击上方"复现设计文档"标签生成
             </div>
+        </div>
+
+        <div id="detail-panel-qa" class="detail-tab-panel">
+            ${renderQaTab(paperId)}
         </div>
 
         <div class="detail-actions">
             <button class="detail-btn ${isFavorite(paperId) ? 'btn-warning' : 'btn-outline'}" data-fav-id="${paperId}" onclick="toggleFavorite('${paperId}'); this.innerHTML = isFavorite('${paperId}') ? '⭐ 已收藏' : '☆ 收藏'; this.classList.toggle('btn-warning', isFavorite('${paperId}')); this.classList.toggle('btn-outline', !isFavorite('${paperId}'));">
                 ${isFavorite(paperId) ? '⭐ 已收藏' : '☆ 收藏'}
             </button>
-            <button class="detail-btn btn-primary" onclick="generatePaperSummary('${paperId}')">
-                🤖 生成AI摘要
+            <button class="detail-btn ${isInCompare(paperId) ? 'btn-success in-compare' : 'btn-outline'}" data-compare-id="${paperId}" onclick="event.stopPropagation(); toggleCompare('${paperId}')">
+                ${isInCompare(paperId) ? '✅ 已加入对比' : '📊 加入对比'}
             </button>
-            <button class="detail-btn btn-success" onclick="generatePaperDesign('${paperId}')">
-                📋 生成设计文档
+            <button class="detail-btn btn-primary" onclick="switchDetailTab('ai', '${paperId}')">
+                🤖 AI 智能分析
             </button>
             <button class="detail-btn btn-warning" onclick="downloadPaper('${paperId}')">
                 📥 下载PDF
@@ -1309,12 +1608,38 @@ function showPaperDetail(paperId) {
     `;
 
     modal.classList.remove('hidden');
-    // 自动生成AI摘要
     generatePaperSummary(paperId);
+}
+
+function toggleCompare(paperId) {
+    if (isInCompare(paperId)) {
+        removeFromCompare(paperId);
+        showToast('已从对比列表移除');
+    } else {
+        addToCompare(paperId);
+    }
+}
+
+function switchDetailTab(tab, paperId) {
+    document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.detail-tab-panel').forEach(p => p.classList.remove('active'));
+    const tabBtn = document.getElementById('detail-tab-' + tab);
+    const panel = document.getElementById('detail-panel-' + tab);
+    if (tabBtn) tabBtn.classList.add('active');
+    if (panel) panel.classList.add('active');
+
+    if (tab === 'design') {
+        const container = document.getElementById('modalDesignContent');
+        if (container && container.textContent.trim() === '点击上方"复现设计文档"标签生成') {
+            generatePaperDesign(paperId);
+        }
+    }
 }
 
 function closeModal() {
     document.getElementById('paperModal').classList.add('hidden');
+    currentQaPaperId = null;
+    qaHistory = [];
 }
 
 // ============ 一键翻译 ============
@@ -1372,6 +1697,95 @@ function translatePaperText(paperId, field) {
         btn.innerHTML = '🌐 一键翻译';
         showToast('⚠️ 翻译失败，请稍后重试');
     });
+}
+
+// ============ 批量翻译 ============
+
+// 批量翻译当前显示的所有论文摘要：分批调用 /api/translate_batch，保留原文并显示进度
+async function batchTranslateAll() {
+    const btn = document.getElementById('batchTranslateBtn');
+    if (!btn) return;
+
+    if (!currentData || !currentData.papers || !currentData.papers.length) {
+        showToast('⚠️ 没有可翻译的论文');
+        return;
+    }
+
+    // 收集当前时间线中实际显示的论文（从 DOM 提取已渲染的论文 ID）
+    const displayedIds = new Set();
+    document.querySelectorAll('.paper-item').forEach(el => {
+        const onclickAttr = el.getAttribute('onclick') || '';
+        const m = onclickAttr.match(/showPaperDetail\('([^']+)'\)/);
+        if (m) displayedIds.add(m[1]);
+    });
+
+    // 按显示顺序收集需要翻译的摘要（跳过空摘要）
+    const toTranslate = currentData.papers
+        .filter(p => displayedIds.has(p.id))
+        .filter(p => p.summary && p.summary.trim())
+        .map(p => ({ id: p.id, summary: p.summary }));
+
+    if (!toTranslate.length) {
+        showToast('⚠️ 没有可翻译的摘要');
+        return;
+    }
+
+    const total = toTranslate.length;
+    btn.disabled = true;
+    btn.innerHTML = `翻译中 (0/${total})...`;
+
+    // 分批调用批量翻译接口，每批 10 条，便于实时显示进度
+    const chunkSize = 10;
+    let done = 0;
+    try {
+        for (let i = 0; i < total; i += chunkSize) {
+            const chunk = toTranslate.slice(i, i + chunkSize);
+            const resp = await fetch('/api/translate_batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    texts: chunk.map(t => t.summary),
+                    source_lang: 'en',
+                    target_lang: 'zh'
+                })
+            });
+            const data = await resp.json();
+            if (data.error) {
+                showToast('⚠️ ' + data.error);
+                btn.disabled = false;
+                btn.innerHTML = '🌐 批量翻译';
+                return;
+            }
+            // 将翻译结果写回 currentData.papers，保留原文并打上已翻译标记
+            (data.results || []).forEach((r, j) => {
+                const paperId = chunk[j].id;
+                const paper = currentData.papers.find(p => p.id === paperId);
+                if (paper) {
+                    if (!paper.summary_original) paper.summary_original = paper.summary;
+                    paper.summary = r.translated;
+                    paper._summary_translated = true;
+                }
+            });
+            done += (data.results || []).length;
+            btn.innerHTML = `翻译中 (${done}/${total})...`;
+        }
+
+        // 重新渲染时间线，展示翻译后的摘要与已译标记
+        applyFilterSort();
+
+        btn.innerHTML = '✅ 批量翻译完成';
+        showToast(`✅ 已翻译 ${done} 篇摘要`);
+        // 3 秒后恢复按钮文案
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = '🌐 批量翻译';
+        }, 3000);
+    } catch (error) {
+        console.error('Batch translate error:', error);
+        btn.disabled = false;
+        btn.innerHTML = '🌐 批量翻译';
+        showToast('⚠️ 批量翻译失败，请稍后重试');
+    }
 }
 
 // ============ AI摘要 ============
@@ -1466,18 +1880,13 @@ function displayPaperSummary(summary, container) {
 // ============ 设计文档 ============
 
 function generatePaperDesign(paperId) {
-    const section = document.getElementById('modalDesignSection');
     const container = document.getElementById('modalDesignContent');
-    if (!section || !container) return;
+    if (!container) return;
 
-    section.classList.remove('hidden');
     container.innerHTML = `
         <div class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px; margin: 0 auto 12px;"></div>
         <div style="font-size: 14px; color: var(--text-secondary);">DeepSeek 正在生成设计文档...</div>
     `;
-
-    // 滚动到设计文档区域
-    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     fetch(`/api/paper/${encodeURIComponent(paperId)}/design?q=${encodeURIComponent(currentQuery)}`)
         .then(response => response.json())
@@ -1574,4 +1983,483 @@ function updateLoadingSteps(steps) {
             clearInterval(interval);
         }
     }, 1500);
+}
+
+// ============ 论文对比 ============
+
+let compareList = [];
+
+function addToCompare(paperId) {
+    const paper = currentPaperData[paperId];
+    if (!paper) return;
+
+    if (compareList.find(p => p.id === paperId)) {
+        showToast('⚠️ 该论文已在对比列表中');
+        return;
+    }
+
+    if (compareList.length >= 2) {
+        showToast('⚠️ 最多只能对比两篇论文');
+        return;
+    }
+
+    compareList.push({
+        id: paper.id,
+        title: paper.title,
+        authors: paper.authors,
+        published: paper.published,
+        impact_factor: paper.impact_factor,
+        estimated_citations: paper.estimated_citations,
+        novelty: paper.novelty
+    });
+
+    updateCompareBar();
+    showToast('✅ 已加入对比');
+    updateCompareButtons();
+}
+
+function removeFromCompare(paperId) {
+    compareList = compareList.filter(p => p.id !== paperId);
+    updateCompareBar();
+    updateCompareButtons();
+}
+
+function clearCompare() {
+    compareList = [];
+    updateCompareBar();
+    updateCompareButtons();
+}
+
+function updateCompareBar() {
+    const bar = document.getElementById('compareBar');
+    const count = document.getElementById('compareCount');
+    const doBtn = document.getElementById('compareDoBtn');
+
+    if (!bar || !count || !doBtn) return;
+
+    count.textContent = compareList.length;
+    doBtn.disabled = compareList.length < 2;
+
+    if (compareList.length > 0) {
+        bar.classList.remove('hidden');
+    } else {
+        bar.classList.add('hidden');
+    }
+}
+
+function updateCompareButtons() {
+    const compareIds = new Set(compareList.map(p => p.id));
+    document.querySelectorAll('[data-compare-id]').forEach(btn => {
+        const pid = btn.getAttribute('data-compare-id');
+        const isInCompare = compareIds.has(pid);
+        btn.classList.toggle('in-compare', isInCompare);
+        const isDetailBtn = btn.classList.contains('detail-btn');
+        if (isInCompare) {
+            btn.innerHTML = isDetailBtn ? '✅ 已加入对比' : '📊';
+            btn.title = '取消对比';
+        } else {
+            btn.innerHTML = isDetailBtn ? '📊 加入对比' : '📈';
+            btn.title = '加入对比';
+        }
+    });
+}
+
+function isInCompare(paperId) {
+    return compareList.some(p => p.id === paperId);
+}
+
+function doCompare() {
+    if (compareList.length < 2) {
+        showToast('⚠️ 请选择至少两篇论文');
+        return;
+    }
+
+    const modal = document.getElementById('compareModal');
+    const body = document.getElementById('compareModalBody');
+    if (!modal || !body) return;
+
+    body.innerHTML = `
+        <div class="compare-loading">
+            <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 3px; margin: 0 auto 16px;"></div>
+            <div style="font-size: 15px; color: var(--text-secondary);">AI 正在深度对比两篇论文...</div>
+            <div style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">分析维度：研究目标、核心方法、实验结果、创新性、应用场景</div>
+        </div>
+    `;
+    modal.classList.remove('hidden');
+
+    const paperIds = compareList.map(p => p.id);
+
+    fetch('/api/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            paper_ids: paperIds,
+            q: currentQuery
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            body.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--danger);">${data.error}</div>`;
+            return;
+        }
+        renderCompareResult(data);
+    })
+    .catch(error => {
+        console.error('Compare error:', error);
+        body.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--text-secondary);">对比失败，请稍后重试</div>`;
+    });
+}
+
+function renderCompareResult(data) {
+    const body = document.getElementById('compareModalBody');
+    if (!body) return;
+
+    const papers = data.papers || [];
+    const analysis = data.ai_analysis || {};
+
+    if (papers.length < 2) {
+        body.innerHTML = '<div style="text-align: center; padding: 40px;">论文数据不足</div>';
+        return;
+    }
+
+    const p1 = papers[0];
+    const p2 = papers[1];
+
+    const similarities = analysis.similarities || [];
+    const differences = analysis.differences || [];
+    const verdict = analysis.verdict || '';
+    const useCases = analysis.use_cases || {};
+
+    const formatDate = (d) => d ? new Date(d).toLocaleDateString('zh-CN') : 'N/A';
+    const formatAuthors = (a) => (a || []).slice(0, 3).join(', ') + ((a || []).length > 3 ? ' 等' : '');
+
+    let diffRows = '';
+    differences.forEach(diff => {
+        diffRows += `
+            <tr>
+                <td class="diff-aspect">${diff.aspect || ''}</td>
+                <td class="diff-cell">${diff.paper1 || ''}</td>
+                <td class="diff-cell">${diff.paper2 || ''}</td>
+            </tr>
+        `;
+    });
+
+    body.innerHTML = `
+        <div class="compare-header">
+            <h2>📊 论文横向对比</h2>
+            <p style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">基于 AI 深度分析的学术对比</p>
+        </div>
+
+        <div class="compare-papers">
+            <div class="compare-paper-card">
+                <div class="compare-paper-badge">论文 1</div>
+                <div class="compare-paper-title">${p1.title || ''}</div>
+                <div class="compare-paper-meta">
+                    <span>👥 ${formatAuthors(p1.authors)}</span>
+                    <span>📅 ${formatDate(p1.published)}</span>
+                    ${p1.venue ? `<span>📍 ${p1.venue}</span>` : ''}
+                </div>
+                <div class="compare-paper-metrics">
+                    <div class="compare-metric">
+                        <div class="compare-metric-value">${p1.impact_factor || 'N/A'}</div>
+                        <div class="compare-metric-label">影响力</div>
+                    </div>
+                    <div class="compare-metric">
+                        <div class="compare-metric-value">${p1.citations || p1.estimated_citations || 0}</div>
+                        <div class="compare-metric-label">引用量</div>
+                    </div>
+                    <div class="compare-metric">
+                        <div class="compare-metric-value">${p1.novelty || 0}</div>
+                        <div class="compare-metric-label">创新性</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="compare-vs">VS</div>
+
+            <div class="compare-paper-card">
+                <div class="compare-paper-badge badge-2">论文 2</div>
+                <div class="compare-paper-title">${p2.title || ''}</div>
+                <div class="compare-paper-meta">
+                    <span>👥 ${formatAuthors(p2.authors)}</span>
+                    <span>📅 ${formatDate(p2.published)}</span>
+                    ${p2.venue ? `<span>📍 ${p2.venue}</span>` : ''}
+                </div>
+                <div class="compare-paper-metrics">
+                    <div class="compare-metric">
+                        <div class="compare-metric-value">${p2.impact_factor || 'N/A'}</div>
+                        <div class="compare-metric-label">影响力</div>
+                    </div>
+                    <div class="compare-metric">
+                        <div class="compare-metric-value">${p2.citations || p2.estimated_citations || 0}</div>
+                        <div class="compare-metric-label">引用量</div>
+                    </div>
+                    <div class="compare-metric">
+                        <div class="compare-metric-value">${p2.novelty || 0}</div>
+                        <div class="compare-metric-label">创新性</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="compare-section">
+            <div class="compare-section-title">🤝 相似点</div>
+            <ul class="compare-list">
+                ${similarities.length > 0 ? similarities.map(s => `<li>${s}</li>`).join('') : '<li style="color: var(--text-tertiary);">暂无分析数据</li>'}
+            </ul>
+        </div>
+
+        <div class="compare-section">
+            <div class="compare-section-title">🔄 差异对比</div>
+            <div class="compare-table-wrap">
+                <table class="compare-table">
+                    <thead>
+                        <tr>
+                            <th>对比维度</th>
+                            <th>论文 1</th>
+                            <th>论文 2</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${diffRows || '<tr><td colspan="3" style="text-align:center; color: var(--text-tertiary); padding: 20px;">暂无分析数据</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="compare-section">
+            <div class="compare-section-title">🎯 综合评价</div>
+            <div class="compare-verdict">${verdict || '暂无综合评价'}</div>
+        </div>
+
+        <div class="compare-section">
+            <div class="compare-section-title">💡 适用场景</div>
+            <div class="compare-use-cases">
+                <div class="use-case-col">
+                    <div class="use-case-title">论文 1 更适合</div>
+                    <ul class="compare-list">
+                        ${(useCases.paper1_better_for || []).length > 0 ? useCases.paper1_better_for.map(s => `<li>${s}</li>`).join('') : '<li style="color: var(--text-tertiary);">暂无</li>'}
+                    </ul>
+                </div>
+                <div class="use-case-col">
+                    <div class="use-case-title">论文 2 更适合</div>
+                    <ul class="compare-list">
+                        ${(useCases.paper2_better_for || []).length > 0 ? useCases.paper2_better_for.map(s => `<li>${s}</li>`).join('') : '<li style="color: var(--text-tertiary);">暂无</li>'}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function closeCompareModal() {
+    document.getElementById('compareModal').classList.add('hidden');
+}
+
+// ============ 论文问答 ============
+
+let currentQaPaperId = null;
+let qaHistory = [];
+
+function renderQaTab(paperId) {
+    return `
+        <div class="qa-container" id="qaContainer">
+            <div class="qa-history" id="qaHistory">
+                ${qaHistory.length === 0 ? `
+                    <div class="qa-empty">
+                        <div style="font-size: 36px; margin-bottom: 12px;">💬</div>
+                        <div style="font-size: 15px; color: var(--text-secondary); margin-bottom: 6px;">针对论文提问</div>
+                        <div style="font-size: 13px; color: var(--text-tertiary);">
+                            基于论文内容，AI 将为你解答相关问题<br>
+                            例如：这篇论文的核心方法是什么？有什么创新点？
+                        </div>
+                    </div>
+                ` : qaHistory.map((item, idx) => `
+                    <div class="qa-message qa-question">
+                        <div class="qa-avatar qa-avatar-user">👤</div>
+                        <div class="qa-bubble">${item.question}</div>
+                    </div>
+                    <div class="qa-message qa-answer">
+                        <div class="qa-avatar qa-avatar-ai">🤖</div>
+                        <div class="qa-bubble">
+                            <div class="qa-answer-text">${item.answer}</div>
+                            ${item.references && item.references.length > 0 ? `
+                                <div class="qa-references">
+                                    <div class="qa-ref-title">📚 引用要点：</div>
+                                    <ul class="qa-ref-list">
+                                        ${item.references.map(r => `<li>${r}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                            ${item.confidence ? `
+                                <div class="qa-confidence">
+                                    <span class="confidence-label">可信度：</span>
+                                    <span class="confidence-badge confidence-${item.confidence}">${item.confidence === 'high' ? '高' : item.confidence === 'medium' ? '中' : '低'}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="qa-input-area">
+                <div class="qa-suggestions">
+                    <span class="qa-suggestion" onclick="askSuggestion('${paperId}', '这篇论文的核心方法是什么？')">核心方法</span>
+                    <span class="qa-suggestion" onclick="askSuggestion('${paperId}', '这篇论文有什么创新点？')">创新点</span>
+                    <span class="qa-suggestion" onclick="askSuggestion('${paperId}', '这篇论文的实验结果如何？')">实验结果</span>
+                    <span class="qa-suggestion" onclick="askSuggestion('${paperId}', '这篇论文的局限性是什么？')">局限性</span>
+                </div>
+                <div class="qa-input-row">
+                    <input type="text" id="qaInput" class="qa-input" placeholder="输入你的问题..." onkeypress="if(event.key==='Enter')askQuestion('${paperId}')" />
+                    <button class="qa-send-btn" onclick="askQuestion('${paperId}')">发送</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function askSuggestion(paperId, question) {
+    const input = document.getElementById('qaInput');
+    if (input) {
+        input.value = question;
+    }
+    askQuestion(paperId);
+}
+
+function askQuestion(paperId) {
+    const input = document.getElementById('qaInput');
+    const question = input ? input.value.trim() : '';
+
+    if (!question) {
+        showToast('⚠️ 请输入问题');
+        return;
+    }
+
+    currentQaPaperId = paperId;
+
+    const historyContainer = document.getElementById('qaHistory');
+    const emptyEl = document.querySelector('.qa-empty');
+    if (emptyEl) emptyEl.remove();
+
+    if (historyContainer) {
+        historyContainer.innerHTML += `
+            <div class="qa-message qa-question">
+                <div class="qa-avatar qa-avatar-user">👤</div>
+                <div class="qa-bubble">${question}</div>
+            </div>
+            <div class="qa-message qa-answer qa-loading" id="qaLoading">
+                <div class="qa-avatar qa-avatar-ai">🤖</div>
+                <div class="qa-bubble">
+                    <div class="qa-loading-spinner"></div>
+                    <span style="margin-left: 8px;">AI 正在思考...</span>
+                </div>
+            </div>
+        `;
+        historyContainer.scrollTop = historyContainer.scrollHeight;
+    }
+
+    if (input) {
+        input.value = '';
+        input.disabled = true;
+    }
+
+    fetch(`/api/paper/${encodeURIComponent(paperId)}/qa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            question: question,
+            history: qaHistory,
+            q: currentQuery
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        const loadingEl = document.getElementById('qaLoading');
+        if (loadingEl) loadingEl.remove();
+
+        if (data.error) {
+            if (historyContainer) {
+                historyContainer.innerHTML += `
+                    <div class="qa-message qa-answer">
+                        <div class="qa-avatar qa-avatar-ai">🤖</div>
+                        <div class="qa-bubble" style="color: var(--danger);">${data.error}</div>
+                    </div>
+                `;
+                historyContainer.scrollTop = historyContainer.scrollHeight;
+            }
+            return;
+        }
+
+        qaHistory.push({
+            question: question,
+            answer: data.answer,
+            confidence: data.confidence,
+            references: data.references
+        });
+
+        if (historyContainer) {
+            const refsHtml = data.references && data.references.length > 0 ? `
+                <div class="qa-references">
+                    <div class="qa-ref-title">📚 引用要点：</div>
+                    <ul class="qa-ref-list">
+                        ${data.references.map(r => `<li>${r}</li>`).join('')}
+                    </ul>
+                </div>
+            ` : '';
+
+            const confHtml = data.confidence ? `
+                <div class="qa-confidence">
+                    <span class="confidence-label">可信度：</span>
+                    <span class="confidence-badge confidence-${data.confidence}">${data.confidence === 'high' ? '高' : data.confidence === 'medium' ? '中' : '低'}</span>
+                </div>
+            ` : '';
+
+            historyContainer.innerHTML += `
+                <div class="qa-message qa-answer">
+                    <div class="qa-avatar qa-avatar-ai">🤖</div>
+                    <div class="qa-bubble">
+                        <div class="qa-answer-text">${data.answer}</div>
+                        ${refsHtml}
+                        ${confHtml}
+                    </div>
+                </div>
+            `;
+            historyContainer.scrollTop = historyContainer.scrollHeight;
+        }
+    })
+    .catch(error => {
+        console.error('Q&A error:', error);
+        const loadingEl = document.getElementById('qaLoading');
+        if (loadingEl) loadingEl.remove();
+
+        if (historyContainer) {
+            historyContainer.innerHTML += `
+                <div class="qa-message qa-answer">
+                    <div class="qa-avatar qa-avatar-ai">🤖</div>
+                    <div class="qa-bubble" style="color: var(--text-tertiary);">网络错误，请稍后重试</div>
+                </div>
+            `;
+            historyContainer.scrollTop = historyContainer.scrollHeight;
+        }
+    })
+    .finally(() => {
+        if (input) input.disabled = false;
+    });
+}
+
+// ============ Toast 提示 ============
+
+function showToast(message) {
+    let toast = document.getElementById('toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toast';
+        toast.className = 'toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.add('show');
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 2000);
 }
